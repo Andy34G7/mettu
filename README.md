@@ -20,6 +20,10 @@ mettu (మెట్లు, /ˈmɛt.t̪u/) is a simple static site generator that
    ```
 
    - Note: Python dependencies are installed by default by the initialising script.
+   
+   Alternatively, you can manually run the setup scripts:
+   - Windows: `scripts\setup_env.bat`
+   - Linux/Mac: `./scripts/setup_env.sh`
 
 3. Configure Environment Variables (Optional - for S3 Upload)
 
@@ -65,7 +69,7 @@ mettu (మెట్లు, /ˈmɛt.t̪u/) is a simple static site generator that
        pygments_theme: "dracula"   # Controls syntax.css and markdown highlighting
     ```
 
-   You can still override the interpreter via the `PY_EXECUTABLE` environment variable if needed, but the config file is the canonical source.
+
 
 5. Create markdown files in the `content` directory.
    - **Dynamic Routing**: Nested directories are supported (e.g., `content/blog/post-1.md` becomes `/blog/post-1.html`).

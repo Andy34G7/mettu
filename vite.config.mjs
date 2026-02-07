@@ -29,120 +29,43 @@ const loadSiteConfig = () => {
   }
 };
 
-
-// Image processing moved to defineConfig
-
-
-if (!fs.existsSync(inputDir)) {
-  fs.mkdirSync(inputDir, { recursive: true });
-}
-
-const sanitizeExecutable = (value) => {
-  if (typeof value !== 'string') {
-    return '';
-  }
-  return value.trim();
+const getScriptPath = (scriptName) => {
+  const isWindows = process.platform === 'win32';
+  const name = isWindows ? `${scriptName}.bat` : `${scriptName}.sh`;
+  return path.join(__dirname, 'scripts', name);
 };
 
-// function moved up
-
-const resolvePythonExecutable = () => {
-  const envOverride = sanitizeExecutable(process.env.PY_EXECUTABLE);
-  if (envOverride) {
-    return envOverride;
-  }
-
-  const venvPythonBin = path.join(__dirname, '.venv/bin/python');
-  const venvPythonScripts = path.join(__dirname, '.venv/Scripts/python.exe');
-  
-  if (process.platform === 'win32') {
-    if (fs.existsSync(venvPythonScripts)) return venvPythonScripts;
-  } else {
-    if (fs.existsSync(venvPythonBin)) return venvPythonBin;
-  }
-  
-  // Fallback check regardless of platform prediction (e.g. mingw/cygwin)
-  if (fs.existsSync(venvPythonBin)) return venvPythonBin;
-  if (fs.existsSync(venvPythonScripts)) return venvPythonScripts;
-
-  const siteConfig = loadSiteConfig();
-  const runtimeConfig = siteConfig && typeof siteConfig === 'object' ? siteConfig.runtime : null;
-
-  const candidates = [
-    runtimeConfig && runtimeConfig.python_executable,
-    runtimeConfig && runtimeConfig.python,
-    runtimeConfig && runtimeConfig.interpreter,
-    siteConfig && siteConfig.python_executable,
-    siteConfig && siteConfig.python,
-  ];
-
-  for (const candidate of candidates) {
-    const value = sanitizeExecutable(candidate);
-    if (value) {
-      return value;
+const runScript = (scriptName, args = '') => {
+    const scriptPath = getScriptPath(scriptName);
+    try {
+        const cmd = args ? `"${scriptPath}" ${args}` : `"${scriptPath}"`;
+        // console.log(`[scripts] Running: ${cmd}`);
+        const output = execSync(cmd);
+        const text = output.toString().trim();
+        if (text) console.log(text);
+        return text;
+    } catch (e) {
+        console.error(`[scripts] Failed to run ${scriptName}:`, e);
+        throw e;
     }
-  }
-
-  return process.platform === 'win32' ? 'python' : 'python3';
 };
-
-let pythonExecutable = resolvePythonExecutable();
-console.log(`[config] Using Python executable: ${pythonExecutable}`);
 
 const ensurePythonRequirements = () => {
-  const venvPath = path.join(__dirname, '.venv');
-  const isWindows = process.platform === 'win32';
-  
-  const venvPython = isWindows 
-    ? path.join(venvPath, 'Scripts', 'python.exe')
-    : path.join(venvPath, 'bin', 'python');
-
-  const venvPip = isWindows
-    ? path.join(venvPath, 'Scripts', 'pip.exe')
-    : path.join(venvPath, 'bin', 'pip');
-
-  if (!fs.existsSync(venvPath)) {
-    console.log('Creating python virtual environment...');
     try {
-      execSync(`"${pythonExecutable}" -m venv "${venvPath}"`, { stdio: 'inherit' });
-      pythonExecutable = venvPython;
+        const setupScript = getScriptPath('setup_env');
+        console.log(`[setup] Running: ${setupScript}`);
+        execSync(`"${setupScript}"`, { stdio: 'inherit' });
     } catch (e) {
-      console.error('Failed to create virtual environment.', e);
-      return;
+        console.error('[setup] Failed.', e);
     }
-  }
-
-  try {
-    console.log('Installing python dependencies...');
-
-    execSync(`"${venvPip}" install -r "${requirementsPath}"`, { stdio: 'inherit' });
-  } catch (e) {
-    console.error('Failed to install Python dependencies.', e);
-  }
 };
 
 const runGenerateStyles = () => {
-  try {
-    const output = execSync(`"${pythonExecutable}" src/main.py --generate-styles`);
-    const text = output.toString().trim();
-    if (text) {
-      console.log(text);
+    try {
+        runScript('generate_styles');
+    } catch (e) {
+        console.error('[styles] Failed to regenerate styles.', e);
     }
-  } catch (e) {
-    console.error('[styles] failed to generate theme/font CSS.', e);
-  }
-};
-
-const refreshPythonExecutable = () => {
-  const resolved = resolvePythonExecutable();
-  if (resolved !== pythonExecutable) {
-    console.log(`[config] Python executable updated to: ${resolved}`);
-    pythonExecutable = resolved;
-    ensurePythonRequirements();
-  } else {
-    pythonExecutable = resolved;
-  }
-  return pythonExecutable;
 };
 
 ensurePythonRequirements();
@@ -151,15 +74,13 @@ runGenerateStyles();
 const handleExit = () => {
   console.log('\nCleaning up build files...');
   try {
-    const output = execSync(`"${pythonExecutable}" src/main.py --clean`);
-    console.log(output.toString().trim());
+      runScript('clean');
   } catch (e) {
     console.error("Cleanup script failed:", e);
   }
   process.exit();
 };
 
-// Ensure we only attach the listener once
 if (!process.listenerCount('SIGINT')) {
   process.on('SIGINT', handleExit);
 }
@@ -172,8 +93,7 @@ const py_build_plugin = () => {
     closeBundle() {
       console.log('Cleaning up root directory...');
       try {
-        const output = execSync(`"${pythonExecutable}" src/main.py --clean`);
-        console.log(output.toString().trim());
+          runScript('clean');
       } catch (e) {
         console.error('Failed to cleanup:', e);
       }
@@ -184,18 +104,17 @@ const py_build_plugin = () => {
       };
 
       const build = (file = null) => {
-        const command = file
-          ? `"${pythonExecutable}" src/main.py --file ${file}`
-          : `"${pythonExecutable}" src/main.py`;
-
         try {
-          const output = execSync(command);
-          console.log(output.toString().trim());
+            if (file) {
+                 runScript('build', `--file "${file}"`);
+            } else {
+                 runScript('build');
+            }
 
-          server.ws.send({ type: 'full-reload', path: "*" });
-          ready = true;
+            server.ws.send({ type: 'full-reload', path: "*" });
+            ready = true;
         } catch (e) {
-          console.error("Script failed to update: ", e);
+            console.error("Script failed to update: ", e);
         }
       };
 
@@ -207,7 +126,6 @@ const py_build_plugin = () => {
         }
 
         if (filePath.endsWith('config.yaml')) {
-          refreshPythonExecutable();
           regenerateGeneratedCss();
           build();
           return;
@@ -257,8 +175,7 @@ export default defineConfig(async ({ command }) => {
   if (command === 'build') {
     console.log('Buiding static pages for production');
     try {
-      const output = execSync(`${pythonExecutable} src/main.py`);
-      console.log(output.toString().trim());
+        runScript('build');
     } catch (e) {
       console.error('Failed to generate static files:', e);
       throw e;
