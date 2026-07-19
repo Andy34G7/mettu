@@ -3,7 +3,7 @@ import yaml
 import markdown
 from markdown.extensions.toc import TocExtension
 from jinja2 import Environment, FileSystemLoader
-from datetime import datetime
+from datetime import datetime, timezone
 import argparse
 import shutil
 import hashlib
@@ -79,6 +79,7 @@ def clean_output(directory):
         ".gitignore",
         ".dockerignore",
         "Dockerfile",
+        "public",
     }
     
     preserved_files = {
@@ -631,6 +632,8 @@ def parse_file(filepath, pygments_theme, markdown_config=None):
         else:
             pass
 
+    page_config["content_html"] = html_data
+
     return page_config, html_data
 
 
@@ -877,6 +880,113 @@ def replace_images_with_processed(html, manifest):
     return parser.get_html()
 
 
+def generate_feeds(collections, site_config, env):
+    build_time = datetime.now(timezone.utc).isoformat()
+    site_name = site_config.get("site_name", "Site")
+    author = site_config.get("author", "")
+
+    # Load feeds configuration
+    feeds_config = site_config.get("feeds")
+    if not isinstance(feeds_config, list):
+        # Default feeds matching sibling repo behavior
+        feeds_config = [
+            {
+                "filename": "feed.xml",
+                "layouts": ["post", "til"],
+                "title": site_name,
+                "subtitle": f"All posts and TILs from {author}",
+                "content": False
+            },
+            {
+                "filename": "blog/feed.xml",
+                "layouts": ["post"],
+                "title": f"{site_name} - Blog",
+                "subtitle": f"Blog posts from {author}",
+                "content": False
+            },
+            {
+                "filename": "til/feed.xml",
+                "layouts": ["til"],
+                "title": f"{site_name} - TIL",
+                "subtitle": f"Today I Learned posts from {author}",
+                "content": False
+            }
+        ]
+
+    try:
+        feed_tmpl = env.get_template("feed.xml.j2")
+    except Exception as e:
+        print(f"Warning: feed.xml.j2 template not found. Skipping feed generation. Error: {e}")
+        return
+
+    def _pages_to_feed_entries(layout_names, include_content=False):
+        entries = []
+        for layout_name in layout_names:
+            for page in collections.get(layout_name, []):
+                if str(page.get("feed", "true")).lower() in ("false", "0", "no"):
+                    continue
+                if not page.get("date"):
+                    continue
+                parsed_date = safe_parse_date(page.get("date"))
+                if parsed_date:
+                    if parsed_date.tzinfo is None:
+                        parsed_date = parsed_date.replace(tzinfo=timezone.utc)
+                    date_iso = parsed_date.isoformat()
+                else:
+                    date_iso = datetime.now(timezone.utc).isoformat()
+
+                # Fetch full html if configured
+                content_html = page.get("content_html", "") if include_content else ""
+
+                entries.append({
+                    "title": page.get("title", "Untitled"),
+                    "url": page.get("url", "/"),
+                    "date_iso": date_iso,
+                    "tags": page.get("tags") or [],
+                    "description": page.get("description") or page.get("summary") or "",
+                    "content_html": content_html,
+                    "layout": layout_name,
+                })
+        entries.sort(key=lambda x: x["date_iso"], reverse=True)
+        return entries
+
+    for feed_cfg in feeds_config:
+        if not isinstance(feed_cfg, dict):
+            continue
+        filename = feed_cfg.get("filename")
+        if not filename:
+            continue
+
+        layouts = _ensure_sequence(feed_cfg.get("layouts"))
+        if not layouts:
+            continue
+
+        title = feed_cfg.get("title") or site_name
+        subtitle = feed_cfg.get("subtitle") or f"Posts from {author}"
+        include_content = bool(feed_cfg.get("content", False))
+
+        entries = _pages_to_feed_entries(layouts, include_content=include_content)
+
+        out_path = os.path.join(OUTPUT_DIR, filename)
+        os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
+
+        try:
+            rendered = feed_tmpl.render(
+                site=site_config,
+                feed_entries=entries,
+                feed_title=title,
+                feed_subtitle=subtitle,
+                feed_self_url="/" + filename.lstrip("/"),
+                feed_alt_url="/",
+                build_time=build_time,
+            )
+            with open(out_path, "w", encoding="utf-8") as f:
+                f.write(rendered)
+            print(f"Generated feed: {filename} ({len(entries)} entries)")
+        except Exception as e:
+            print(f"Error: Failed to generate feed {filename}: {e}")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--file")
@@ -1041,13 +1151,15 @@ def main():
 
         sitemap_template = env.get_template("sitemap.xml.j2")
         sitemap_xml = sitemap_template.render(site=site_config, pages=sitemap_list)
-        sitemap_xml = sitemap_template.render(site=site_config, pages=sitemap_list)
         try:
             with open(os.path.join(OUTPUT_DIR, "sitemap.xml"), "w") as f:
                 f.write(sitemap_xml)
             print("Generated sitemap.xml")
         except OSError as e:
             print(f"Error: Failed to write sitemap.xml: {e}")
+
+        # Generate RSS/Atom feeds
+        generate_feeds(collections, site_config, env)
 
 
 if __name__ == "__main__":
