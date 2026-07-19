@@ -77,13 +77,27 @@ mettu (మెట్లు, /ˈmɛt.t̪u/) is a simple static site generator that
    - **Image Optimization**: Images in `assets/img` are automatically processed and converted to WebP.
    - **S3 Upload**: If configured in `.env`, processed images are uploaded to the specified S3 bucket.
 
-8. Run the development server
+8. Web Feeds (RSS / Atom)
+   - Feeds are dynamically generated during build. You can customize them in `config.yaml` using the `feeds` key:
+     ```yaml
+     feeds:
+       - filename: "feed.xml"
+         layouts: ["post"]
+         title: "My Site Feed"
+         subtitle: "A collection of my thoughts and findings"
+         content: true # Set to true to include the full HTML content of each post
+     ```
+   - **Default Feeds**: If the `feeds` key is omitted, three feeds will be generated: `/feed.xml` (all posts and TILs), `/blog/feed.xml` (blog posts only), and `/til/feed.xml` (TIL posts only).
+   - **Excluding Pages**: Add `feed: false` to a markdown page's frontmatter to exclude it from all feeds.
+   - **Styling**: The feed uses `public/pretty-feed-v3.xsl` to render beautifully when opened directly in a browser.
+
+9. Run the development server
 
    ```bash
    npm run dev
    ```
 
-9. Build the site for production
+10. Build the site for production
 
    ```bash
    npm run build

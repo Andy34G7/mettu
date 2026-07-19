@@ -75,3 +75,10 @@ navigation:
     url: "/"
   - name: "Blog"
     url: "/blog/"
+
+feeds:
+  - filename: "feed.xml"
+    layouts: ["post"]
+    title: "My Site Feed"
+    subtitle: "A collection of my thoughts and findings"
+    content: true
