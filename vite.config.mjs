@@ -2,6 +2,7 @@ import { defineConfig } from "vite";
 import dotenv from 'dotenv';
 import tailwindcss from "@tailwindcss/vite";
 import { execFileSync } from 'child_process';
+import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -30,9 +31,6 @@ const loadSiteConfig = () => {
 };
 
 
-// Image processing moved to defineConfig
-
-
 if (!fs.existsSync(inputDir)) {
   fs.mkdirSync(inputDir, { recursive: true });
 }
@@ -44,26 +42,17 @@ const sanitizeExecutable = (value) => {
   return value.trim();
 };
 
-// function moved up
-
 const resolvePythonExecutable = () => {
   const envOverride = sanitizeExecutable(process.env.PY_EXECUTABLE);
   if (envOverride) {
     return envOverride;
   }
 
-  const venvPythonBin = path.join(__dirname, '.venv/bin/python');
-  const venvPythonScripts = path.join(__dirname, '.venv/Scripts/python.exe');
-  
-  if (process.platform === 'win32') {
-    if (fs.existsSync(venvPythonScripts)) return venvPythonScripts;
-  } else {
-    if (fs.existsSync(venvPythonBin)) return venvPythonBin;
-  }
-  
-  // Fallback check regardless of platform prediction (e.g. mingw/cygwin)
-  if (fs.existsSync(venvPythonBin)) return venvPythonBin;
-  if (fs.existsSync(venvPythonScripts)) return venvPythonScripts;
+  const venvCandidates = process.platform === 'win32'
+    ? [path.join(__dirname, '.venv/Scripts/python.exe'), path.join(__dirname, '.venv/bin/python')]
+    : [path.join(__dirname, '.venv/bin/python'), path.join(__dirname, '.venv/Scripts/python.exe')];
+  const foundVenv = venvCandidates.find(p => fs.existsSync(p));
+  if (foundVenv) return foundVenv;
 
   const siteConfig = loadSiteConfig();
   const runtimeConfig = siteConfig && typeof siteConfig === 'object' ? siteConfig.runtime : null;
@@ -101,7 +90,25 @@ const ensurePythonRequirements = () => {
     ? path.join(venvPath, 'Scripts', 'pip.exe')
     : path.join(venvPath, 'bin', 'pip');
 
-  if (!fs.existsSync(venvPath)) {
+  const hashFile = path.join(__dirname, '.cache/requirements.hash');
+  let currentHash = '';
+  try {
+    const content = fs.readFileSync(requirementsPath, 'utf8') + '\n' + venvPython + '\n' + pythonExecutable;
+    currentHash = crypto.createHash('sha256').update(content).digest('hex');
+  } catch (e) {
+    console.error('Failed to read requirements.txt:', e);
+  }
+
+  if (fs.existsSync(venvPython) && fs.existsSync(hashFile)) {
+    try {
+      const cachedHash = fs.readFileSync(hashFile, 'utf8').trim();
+      if (cachedHash === currentHash && currentHash) {
+        return;
+      }
+    } catch (_) {}
+  }
+
+  if (!fs.existsSync(venvPython)) {
     console.log('Creating python virtual environment...');
     try {
       execFileSync(pythonExecutable, ['-m', 'venv', venvPath], { stdio: 'inherit' });
@@ -114,22 +121,13 @@ const ensurePythonRequirements = () => {
 
   try {
     console.log('Installing python dependencies...');
-
     execFileSync(venvPip, ['install', '-r', requirementsPath], { stdio: 'inherit' });
-  } catch (e) {
-    console.error('Failed to install Python dependencies.', e);
-  }
-};
-
-const runGenerateStyles = () => {
-  try {
-    const output = execFileSync(pythonExecutable, ['src/main.py', '--generate-styles']);
-    const text = output.toString().trim();
-    if (text) {
-      console.log(text);
+    if (currentHash) {
+      fs.mkdirSync(path.dirname(hashFile), { recursive: true });
+      fs.writeFileSync(hashFile, currentHash, 'utf8');
     }
   } catch (e) {
-    console.error('[styles] failed to generate theme/font CSS.', e);
+    console.error('Failed to install Python dependencies.', e);
   }
 };
 
@@ -139,14 +137,13 @@ const refreshPythonExecutable = () => {
     console.log(`[config] Python executable updated to: ${resolved}`);
     pythonExecutable = resolved;
     ensurePythonRequirements();
-  } else {
-    pythonExecutable = resolved;
   }
   return pythonExecutable;
 };
 
 ensurePythonRequirements();
-runGenerateStyles();
+
+const GLOB_IGNORES = ['!dist/**', '!node_modules/**', '!**/.venv/**', '!templates/**', '!public/**', '!content/**', '!assets/**', '!src/**', '!scripts/**', '!tests/**'];
 
 const handleExit = () => {
   console.log('\nCleaning up build files...');
@@ -170,7 +167,7 @@ const py_build_plugin = () => {
   return {
     name: 'builder-ssg',
     closeBundle() {
-      const xmlFiles = glob.sync(['**/*.xml', '!dist/**', '!node_modules/**', '!**/.venv/**', '!templates/**', '!public/**', '!content/**', '!assets/**', '!src/**', '!scripts/**', '!tests/**']);
+      const xmlFiles = glob.sync(['**/*.xml', ...GLOB_IGNORES]);
       for (const relPath of xmlFiles) {
         const destPath = path.join('./dist', relPath);
         fs.mkdirSync(path.dirname(destPath), { recursive: true });
@@ -186,10 +183,6 @@ const py_build_plugin = () => {
       }
     },
     configureServer(server) {
-      const regenerateGeneratedCss = () => {
-        runGenerateStyles();
-      };
-
       const build = (file = null) => {
         try {
           const args = file ? ['src/main.py', '--file', file] : ['src/main.py'];
@@ -212,7 +205,6 @@ const py_build_plugin = () => {
 
         if (filePath.endsWith('config.yaml')) {
           refreshPythonExecutable();
-          regenerateGeneratedCss();
           build();
           return;
         }
@@ -224,26 +216,30 @@ const py_build_plugin = () => {
           } else if (event === 'add' || event === 'unlink') {
             build();
           }
+          return;
         }
         if (filePath.includes('/assets/images/')) {
-             if (event === 'add' || event === 'change' || event === 'unlink') {
-                 console.log(`[watcher] Image change detected: ${event} ${filePath}`);
-                 try {
-                     const siteConfig = loadSiteConfig();
-                     await processImages(inputDir, outputDir, siteConfig);
-                     build();
-                 } catch (e) {
-                     console.error('[watcher] Image processing failed', e);
-                 }
-             }
+          if (event === 'add' || event === 'change' || event === 'unlink') {
+            console.log(`[watcher] Image change detected: ${event} ${filePath}`);
+            try {
+              const siteConfig = loadSiteConfig();
+              await processImages(inputDir, outputDir, siteConfig);
+              build();
+            } catch (e) {
+              console.error('[watcher] Image processing failed', e);
+            }
+          }
+          return;
         }
         if (event === 'change' && filePath.includes('/assets/css/')) {
           build();
+          return;
         }
         if (event === 'unlink') {
           if (!filePath.includes('/assets/images/')) {
-              build();
+            build();
           }
+          return;
         }
       });
     },
@@ -258,6 +254,21 @@ export default defineConfig(async ({ command }) => {
     console.error('[images] processing failed', e);
   }
 
+  if (command !== 'build') {
+    const requiredCss = [
+      'assets/css/generated.daisyui.css',
+      'assets/css/generated.fonts.css',
+      'assets/css/syntax.css'
+    ];
+    if (requiredCss.some(f => !fs.existsSync(path.join(__dirname, f)))) {
+      try {
+        execFileSync(pythonExecutable, ['src/main.py', '--generate-styles']);
+      } catch (e) {
+        console.error('[styles] failed to generate theme/font CSS.', e);
+      }
+    }
+  }
+
   if (command === 'build') {
     console.log('Buiding static pages for production');
     try {
@@ -269,7 +280,7 @@ export default defineConfig(async ({ command }) => {
     }
   }
 
-  const inputFiles = glob.sync(['**/*.html', '!dist/**', '!node_modules/**', '!**/.venv/**', '!templates/**', '!public/**', '!content/**', '!assets/**', '!src/**', '!scripts/**', '!tests/**']);
+  const inputFiles = glob.sync(['**/*.html', ...GLOB_IGNORES]);
 
   return {
     plugins: [
