@@ -1,27 +1,27 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <?xml-stylesheet href="/pretty-feed-v3.xsl?v=4" type="text/xsl"?>
-<feed xmlns="http://www.w3.org/2005/Atom">
-  {% set root = site.base_url %}
-  {% if '://' not in root %}{% set root = 'https://' ~ root %}{% endif %}
-  {% set base = root ~ (site.base_path | default('')) %}
-
-  <title>{{ feed_title | default(site.site_name) }}</title>
-  <subtitle>{{ feed_subtitle | default('Posts from ' ~ site.author) }}</subtitle>
-  <link href="{{ base }}{{ feed_self_url }}" rel="self" type="application/atom+xml"/>
-  <link href="{{ base }}{{ feed_alt_url | default('/') }}" rel="alternate" type="text/html"/>
-  <id>{{ base }}{{ feed_alt_url | default('/') }}</id>
-  <updated>{{ build_time }}</updated>
+{% set root = (site.base_url | default('localhost', true) | string).strip().rstrip('/') %}
+{% if '://' not in root %}{% set root = 'https://' ~ root %}{% endif %}
+{% set bp = (site.base_path | default('', true) | string).strip().strip('/') %}
+{% set base = root ~ ('/' ~ bp if bp else '') %}
+<feed xmlns="http://www.w3.org/2005/Atom" xml:base="{{ base | e }}/">
+  <title>{{ (feed_title | default(site.site_name, true)) | e }}</title>
+  <subtitle>{{ (feed_subtitle | default('Posts from ' ~ site.author, true)) | e }}</subtitle>
+  <link href="{{ (base ~ feed_self_url) | e }}" rel="self" type="application/atom+xml"/>
+  <link href="{{ (base ~ (feed_alt_url | default('/', true))) | e }}" rel="alternate" type="text/html"/>
+  <id>{{ (base ~ (feed_alt_url | default('/', true))) | e }}</id>
+  <updated>{{ build_time | e }}</updated>
   <author>
-    <name>{{ site.author }}</name>
+    <name>{{ site.author | e }}</name>
   </author>
 
   {% for entry in feed_entries %}
   <entry>
     <title>{{ entry.title | e }}</title>
-    <link href="{{ base }}{{ entry.url }}" rel="alternate" type="text/html"/>
-    <id>{{ base }}{{ entry.url }}</id>
-    <published>{{ entry.date_iso }}</published>
-    <updated>{{ entry.date_iso }}</updated>
+    <link href="{{ (base ~ entry.url) | e }}" rel="alternate" type="text/html"/>
+    <id>{{ (base ~ entry.url) | e }}</id>
+    <published>{{ entry.date_iso | e }}</published>
+    <updated>{{ entry.date_iso | e }}</updated>
     {% if entry.tags %}
     {% for tag in entry.tags %}
     <category term="{{ tag | e }}"/>
@@ -31,7 +31,7 @@
     <summary type="text">{{ entry.description | e }}</summary>
     {% endif %}
     {% if entry.content_html %}
-    <content type="html"><![CDATA[{{ entry.content_html }}]]></content>
+    <content type="html">{{ entry.content_html | e }}</content>
     {% endif %}
   </entry>
   {% endfor %}

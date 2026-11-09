@@ -1,9 +1,8 @@
 import os
 import yaml
 import markdown
-from markdown.extensions.toc import TocExtension
 from jinja2 import Environment, FileSystemLoader
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 import argparse
 import shutil
 import hashlib
@@ -26,13 +25,41 @@ CONFIG_FILE = "config.yaml"
 OUTPUT_DIR = "."
 IMAGES_DIR = "assets/images"
 CONTENT_DIR = "content"
-POSTS_DIR = "content/posts"
 
 PAGE_SLUG_CACHE = ".cache/page-slugs.json"
 IMAGE_MANIFEST_PATH = ".cache/image-manifest.json"
 GENERATED_THEME_PATH = "assets/css/generated.daisyui.css"
 GENERATED_FONTS_PATH = "assets/css/generated.fonts.css"
 GENERATED_SYNTAX_PATH = "assets/css/syntax.css"
+
+PRESERVED_ROOTS = {
+    ".git",
+    ".github",
+    ".cache",
+    ".venv",
+    "assets",
+    "content",
+    "dist",
+    "node_modules",
+    "src",
+    "templates",
+    "scripts",
+    "public",
+    "tests",
+    "config.yaml",
+    "package.json",
+    "package-lock.json",
+    "requirements.txt",
+    "vite.config.mjs",
+    "README.md",
+    "LICENSE.md",
+    "CONTRIBUTING.md",
+    ".env",
+    ".env.example",
+    ".gitignore",
+    ".dockerignore",
+    "Dockerfile",
+}
 
 
 def load_previous_slugs():
@@ -54,57 +81,11 @@ def save_current_slugs(slugs):
 
 def clean_output(directory):
     print("Cleaning old build files...")
-    preserved_roots = {
-        ".git",
-        ".github",
-        ".cache",
-        ".venv",
-        "assets",
-        "content",
-        "dist",
-        "node_modules",
-        "src",
-        "templates",
-        "scripts",
-        "config.yaml",
-        "package.json",
-        "package-lock.json",
-        "requirements.txt",
-        "vite.config.mjs",
-        "README.md",
-        "LICENSE.md",
-        "CONTRIBUTING.md",
-        ".env",
-        ".env.example",
-        ".gitignore",
-        ".dockerignore",
-        "Dockerfile",
-        "public",
-    }
-    
-    preserved_files = {
-        "config.yaml",
-        "package.json",
-        "package-lock.json",
-        "requirements.txt",
-        "vite.config.mjs",
-        "README.md",
-        "LICENSE.md",
-        "CONTRIBUTING.md",
-        ".env",
-        ".env.example",
-        ".gitignore",
-    }
-
     for name in os.listdir(directory):
-        path = os.path.join(directory, name)
-        
-        if name in preserved_roots or name in preserved_files:
-            continue
-            
-        if name.startswith(".") and name not in preserved_roots:
+        if name in PRESERVED_ROOTS or name.startswith("."):
             continue
 
+        path = os.path.join(directory, name)
         try:
             if os.path.isfile(path) or os.path.islink(path):
                 os.remove(path)
@@ -143,6 +124,9 @@ def safe_parse_date(date_value):
 
     if isinstance(date_value, datetime):
         return date_value
+
+    if isinstance(date_value, date):
+        return datetime(date_value.year, date_value.month, date_value.day)
 
     if isinstance(date_value, str):
         formats = [
@@ -239,7 +223,6 @@ def normalize_theme_config(config):
 
 def write_theme_file(config, output_path=GENERATED_THEME_PATH):
     theme = config.get("theme") or {}
-    print(f"DEBUG: write_theme_file theme config: {theme}")
     include = theme.get("include") or []
     include_list = _ensure_sequence(include)
 
@@ -499,17 +482,6 @@ def generate_styles(
     return config, active_theme
 
 
-MARKDOWN_EXTENSIONS = [
-    "fenced_code",
-    "codehilite",
-    "footnotes",
-    "tables",
-    "attr_list",
-    "sane_lists",
-    "md_in_html",
-    TocExtension(permalink=True),
-]
-
 def build_markdown(pygments_theme, markdown_config=None):
     if markdown_config is None:
         markdown_config = {}
@@ -630,7 +602,7 @@ def parse_file(filepath, pygments_theme, markdown_config=None):
         if parsed_date:
             page_config["date"] = parsed_date.strftime("%Y-%m-%d")
         else:
-            pass
+            page_config["date"] = None
 
     page_config["content_html"] = html_data
 
@@ -810,14 +782,19 @@ class ImageReplacementParser(HTMLParser):
         super().__init__(convert_charrefs=False)
         self.manifest = manifest or {}
         self.output = []
+        self.picture_depth = 0
 
     def handle_starttag(self, tag, attrs):
+        if tag.lower() == "picture":
+            self.picture_depth += 1
         self._handle_start(tag, attrs)
 
     def handle_startendtag(self, tag, attrs):
         self._handle_start(tag, attrs)
 
     def handle_endtag(self, tag):
+        if tag.lower() == "picture" and self.picture_depth > 0:
+            self.picture_depth -= 1
         self.output.append(f"</{tag}>")
 
     def handle_data(self, data):
@@ -839,7 +816,7 @@ class ImageReplacementParser(HTMLParser):
         self.output.append(f"<?{data}>")
 
     def _handle_start(self, tag, attrs):
-        if tag.lower() == "img":
+        if tag.lower() == "img" and self.picture_depth == 0:
             replacement = self._build_replacement(attrs)
             if replacement:
                 self.output.append(replacement)
@@ -854,14 +831,17 @@ class ImageReplacementParser(HTMLParser):
         if not src:
             return None
 
+        if src.startswith(("http://", "https://", "//", "data:")):
+            return None
+
         normalized = src.split("?", 1)[0].split("#", 1)[0].lstrip("/")
         if normalized.startswith("./"):
             normalized = normalized[2:]
         if "assets/images/" not in normalized:
             return None
 
-        relative = normalized.split("assets/images/", 1)[1]
-        manifest_entry = self.manifest.get(os.path.basename(relative))
+        relative = normalized.split("assets/images/", 1)[1].replace("\\", "/")
+        manifest_entry = self.manifest.get(relative)
         if not manifest_entry:
             return None
 
@@ -967,7 +947,11 @@ def generate_feeds(collections, site_config, env):
 
         entries = _pages_to_feed_entries(layouts, include_content=include_content)
 
-        out_path = os.path.join(OUTPUT_DIR, filename)
+        clean_rel = os.path.normpath(str(filename).lstrip("/\\")).replace("\\", "/")
+        if clean_rel.startswith("..") or clean_rel.split("/")[0] in PRESERVED_ROOTS:
+            print(f"Warning: Skipping unsafe feed filename: {filename}")
+            continue
+        out_path = os.path.join(OUTPUT_DIR, clean_rel)
         os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
 
         try:
@@ -976,7 +960,7 @@ def generate_feeds(collections, site_config, env):
                 feed_entries=entries,
                 feed_title=title,
                 feed_subtitle=subtitle,
-                feed_self_url="/" + filename.lstrip("/"),
+                feed_self_url="/" + clean_rel.lstrip("/"),
                 feed_alt_url="/",
                 build_time=build_time,
             )
@@ -1016,9 +1000,10 @@ def main():
     if args.file:
         print(f"Change detected in {args.file}, proceeding to rebuild...")
         if not os.path.exists(args.file):
-
-            slug = os.path.splitext(os.path.basename(args.file))[0]
-            if slug != "index":
+            rel = os.path.relpath(args.file, CONTENT_DIR).replace(os.sep, "/")
+            slug = os.path.splitext(rel)[0]
+            top_level = slug.lstrip("/").split("/")[0]
+            if top_level and top_level != "index" and top_level not in PRESERVED_ROOTS:
                 out_dir = os.path.join(OUTPUT_DIR, slug)
                 if os.path.isdir(out_dir):
                     shutil.rmtree(out_dir)
@@ -1048,7 +1033,6 @@ def main():
     else:
         print("Running a full build...")
         sitemap_list = []
-        all_posts = []
         pages = []
         tags = {}
 
@@ -1081,7 +1065,14 @@ def main():
                 current_slugs.add(slug_key)
 
                 pages.append({"data": page_data, "content": html_content})
-                sitemap_list.append(page_data["url"])
+
+                lastmod = page_data.get("date")
+                if not lastmod:
+                    try:
+                        lastmod = datetime.fromtimestamp(os.path.getmtime(filepath)).strftime("%Y-%m-%d")
+                    except OSError:
+                        lastmod = datetime.now().strftime("%Y-%m-%d")
+                sitemap_list.append({"url": page_data["url"], "lastmod": lastmod})
                 
                 layout = page_data.get("layout")
                 if layout:
@@ -1093,7 +1084,8 @@ def main():
 
         removed = previous_slugs - current_slugs
         for slug in removed:
-             if slug == "index":
+             top_level = slug.lstrip("/").split("/")[0]
+             if not top_level or top_level == "index" or top_level in PRESERVED_ROOTS:
                  continue
              out_dir = os.path.join(OUTPUT_DIR, slug)
              if os.path.isdir(out_dir):
@@ -1152,7 +1144,7 @@ def main():
         sitemap_template = env.get_template("sitemap.xml.j2")
         sitemap_xml = sitemap_template.render(site=site_config, pages=sitemap_list)
         try:
-            with open(os.path.join(OUTPUT_DIR, "sitemap.xml"), "w") as f:
+            with open(os.path.join(OUTPUT_DIR, "sitemap.xml"), "w", encoding="utf-8") as f:
                 f.write(sitemap_xml)
             print("Generated sitemap.xml")
         except OSError as e:
