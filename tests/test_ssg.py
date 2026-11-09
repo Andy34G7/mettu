@@ -24,6 +24,9 @@ from src.main import (
     ImageReplacementParser,
     scaffold_content,
     check_site,
+    _render_callouts,
+    build_docs_navigation,
+    _flatten_toc_headings,
 )
 
 
@@ -279,6 +282,119 @@ class TestScaffoldAndCheckSite(unittest.TestCase):
                 exit_on_error=False,
             )
             self.assertTrue(any("Duplicate URL" in e for e in errors))
+
+
+class TestCallouts(unittest.TestCase):
+    def test_callout_kinds(self):
+        cases = [
+            ("NOTE", "alert-info", "Note"),
+            ("TIP", "alert-success", "Tip"),
+            ("IMPORTANT", "alert-secondary", "Important"),
+            ("WARNING", "alert-warning", "Warning"),
+            ("CAUTION", "alert-error", "Caution"),
+        ]
+        for kind, expected_cls, expected_label in cases:
+            raw_html = f"<blockquote>\n<p>[!{kind}]<br />\nCallout message body.</p>\n</blockquote>"
+            rendered = _render_callouts(raw_html)
+            self.assertIn(f'class="alert {expected_cls} my-4 not-prose"', rendered)
+            self.assertIn(expected_label, rendered)
+            self.assertIn("<p>Callout message body.</p>", rendered)
+            self.assertIn('role="note"', rendered)
+
+    def test_callout_multi_paragraph(self):
+        raw_html = "<blockquote>\n<p>[!NOTE] First paragraph.</p>\n<p>Second paragraph.</p>\n</blockquote>"
+        rendered = _render_callouts(raw_html)
+        self.assertIn("alert-info", rendered)
+        self.assertIn("<p>First paragraph.</p><p>Second paragraph.</p>", rendered)
+
+    def test_standard_blockquote_unchanged(self):
+        raw_html = "<blockquote>\n<p>Just a standard quote from a book.</p>\n</blockquote>"
+        rendered = _render_callouts(raw_html)
+        self.assertEqual(rendered, raw_html)
+
+
+class TestDocsNavigation(unittest.TestCase):
+    def test_empty_docs(self):
+        tree, ordered = build_docs_navigation([])
+        self.assertEqual(tree, [])
+        self.assertEqual(ordered, [])
+
+    def test_section_inference_and_ordering(self):
+        docs = [
+            {
+                "title": "Endpoints",
+                "_rel_path": "docs/api/endpoints.md",
+                "url": "/docs/api/endpoints",
+                "order": 5,
+            },
+            {
+                "title": "Introduction",
+                "_rel_path": "docs/index.md",
+                "url": "/docs",
+                "order": 1,
+            },
+            {
+                "title": "Getting Started",
+                "_rel_path": "docs/getting-started.md",
+                "section": "Guide",
+                "url": "/docs/getting-started",
+                "order": 2,
+            },
+        ]
+        tree, ordered = build_docs_navigation(docs)
+
+        # Overview section is first
+        self.assertEqual([sec["title"] for sec in tree], ["Overview", "Guide", "Api"])
+        self.assertEqual([doc["title"] for doc in ordered], ["Introduction", "Getting Started", "Endpoints"])
+
+        # Check section assigned
+        self.assertEqual(ordered[0]["section"], "Overview")
+        self.assertEqual(ordered[1]["section"], "Guide")
+        self.assertEqual(ordered[2]["section"], "Api")
+
+        # Check prev / next links
+        self.assertIsNone(ordered[0]["prev_page"])
+        self.assertEqual(ordered[0]["next_page"]["title"], "Getting Started")
+        self.assertEqual(ordered[1]["prev_page"]["title"], "Introduction")
+        self.assertEqual(ordered[1]["next_page"]["title"], "Endpoints")
+        self.assertEqual(ordered[2]["prev_page"]["title"], "Getting Started")
+        self.assertIsNone(ordered[2]["next_page"])
+
+        # Check breadcrumbs
+        self.assertEqual(ordered[0]["breadcrumbs"], [{"name": "Docs", "url": "/docs/"}])
+        self.assertEqual(
+            ordered[1]["breadcrumbs"],
+            [
+                {"name": "Docs", "url": "/docs/"},
+                {"name": "Guide", "url": None},
+                {"name": "Getting Started", "url": "/docs/getting-started"},
+            ],
+        )
+
+
+class TestMarkdownAndToc(unittest.TestCase):
+    def test_flatten_toc_headings(self):
+        tokens = [
+            {
+                "name": "Introduction",
+                "children": [
+                    {
+                        "name": "Features",
+                        "children": [{"name": "Fast", "children": []}],
+                    }
+                ],
+            },
+            {"name": "Installation", "children": []},
+        ]
+        self.assertEqual(
+            _flatten_toc_headings(tokens),
+            ["Introduction", "Features", "Fast", "Installation"],
+        )
+
+    def test_codehilite_highlight_class(self):
+        md = build_markdown("native")
+        html = md.convert("```python\nx = 1\n```")
+        self.assertIn('class="highlight"', html)
 
 
 if __name__ == "__main__":

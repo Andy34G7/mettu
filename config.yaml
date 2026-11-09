@@ -75,6 +75,8 @@ navigation:
     url: "/"
   - name: "Blog"
     url: "/blog/"
+  - name: "Docs"
+    url: "/docs/"
 
 feeds:
   - filename: "feed.xml"

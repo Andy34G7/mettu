@@ -1,0 +1,230 @@
+{% extends "base.html" %}
+
+{% block content %}
+{% set docs_nav %}
+{% for section in docs_tree or [] %}
+<div class="mb-4">
+  <div class="text-xs font-bold uppercase tracking-wider opacity-60 px-3 py-1">{{ section.title }}</div>
+  <ul class="menu menu-sm bg-base-200/50 rounded-box w-full">
+    {% for item in section['items'] %}
+    {% set item_norm = item.url.rstrip('/') %}
+    {% set page_norm = page.url.rstrip('/') %}
+    <li>
+      <a href="{{ item.url if item.url.endswith('/') else item.url ~ '/' }}" class="{% if item_norm == page_norm %}active font-semibold{% endif %}">
+        {{ item.title }}
+      </a>
+    </li>
+    {% endfor %}
+  </ul>
+</div>
+{% endfor %}
+{% endset %}
+
+<div class="flex flex-col lg:flex-row gap-8">
+  <!-- Left Sidebar -->
+  <aside class="w-full lg:w-64 shrink-0">
+    <div class="mb-4">
+      <button type="button" class="btn btn-outline btn-sm w-full justify-between" onclick="document.getElementById('docs-search-modal').showModal()">
+        <span class="flex items-center gap-2">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
+          Search docs...
+        </span>
+        <kbd class="kbd kbd-xs">⌘K</kbd>
+      </button>
+    </div>
+
+    <!-- Mobile Navigation -->
+    <details class="lg:hidden collapse collapse-arrow bg-base-200 mb-4">
+      <summary class="collapse-title font-medium text-sm">Documentation Navigation</summary>
+      <div class="collapse-content">
+        {{ docs_nav }}
+      </div>
+    </details>
+
+    <!-- Desktop Navigation -->
+    <nav class="hidden lg:block sticky top-28 max-h-[calc(100vh-8rem)] overflow-y-auto pr-2">
+      {{ docs_nav }}
+    </nav>
+  </aside>
+
+  <!-- Main Document Column -->
+  <div class="flex-1 min-w-0">
+    {% if page.breadcrumbs %}
+    <div class="text-sm breadcrumbs mb-4 opacity-80">
+      <ul>
+        {% for crumb in page.breadcrumbs %}
+        <li>
+          {% if crumb.url and not loop.last %}
+          <a href="{{ crumb.url }}">{{ crumb.name }}</a>
+          {% else %}
+          <span>{{ crumb.name }}</span>
+          {% endif %}
+        </li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% endif %}
+
+    <article class="prose dark:prose-invert max-w-none">
+      <h1>{{ page.title }}</h1>
+      {{ content | safe }}
+    </article>
+
+    <!-- Prev / Next Navigation -->
+    {% if page.prev_page or page.next_page %}
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-12 pt-6 border-t border-base-300">
+      <div>
+        {% if page.prev_page %}
+        <a href="{{ page.prev_page.url if page.prev_page.url.endswith('/') else page.prev_page.url ~ '/' }}" class="btn btn-outline btn-block justify-start text-left h-auto py-3 normal-case">
+          <div>
+            <div class="text-xs opacity-60">← Previous ({{ page.prev_page.section }})</div>
+            <div class="font-semibold text-sm">{{ page.prev_page.title }}</div>
+          </div>
+        </a>
+        {% endif %}
+      </div>
+      <div class="sm:text-right">
+        {% if page.next_page %}
+        <a href="{{ page.next_page.url if page.next_page.url.endswith('/') else page.next_page.url ~ '/' }}" class="btn btn-outline btn-block justify-end text-right h-auto py-3 normal-case">
+          <div>
+            <div class="text-xs opacity-60">({{ page.next_page.section }}) Next →</div>
+            <div class="font-semibold text-sm">{{ page.next_page.title }}</div>
+          </div>
+        </a>
+        {% endif %}
+      </div>
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- Right Sticky TOC -->
+  {% if page.toc_tokens %}
+  <aside class="hidden xl:block w-56 shrink-0">
+    <nav class="sticky top-28 max-h-[calc(100vh-8rem)] overflow-y-auto pl-2 text-sm">
+      <div class="font-bold text-xs uppercase tracking-wider opacity-60 mb-2">On this page</div>
+      <ul class="menu menu-xs p-0 space-y-1">
+        {% for token in page.toc_tokens %}
+        <li>
+          <a href="#{{ token.id }}" class="hover:underline py-1">{{ token.name }}</a>
+          {% if token.children %}
+          <ul class="pl-2 space-y-1">
+            {% for child in token.children %}
+            <li><a href="#{{ child.id }}" class="hover:underline py-1">{{ child.name }}</a></li>
+            {% endfor %}
+          </ul>
+          {% endif %}
+        </li>
+        {% endfor %}
+      </ul>
+    </nav>
+  </aside>
+  {% endif %}
+</div>
+
+<!-- Search Dialog Modal -->
+<dialog id="docs-search-modal" class="modal">
+  <div class="modal-box p-4 max-w-xl">
+    <div class="flex items-center gap-2 border-b border-base-300 pb-3">
+      <svg class="w-5 h-5 opacity-60" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
+      <input id="docs-search-input" type="search" placeholder="Search documentation..." class="input input-ghost w-full focus:outline-none focus:bg-transparent" autocomplete="off" />
+      <kbd class="kbd kbd-sm">ESC</kbd>
+    </div>
+    <div id="docs-search-results" class="py-2 max-h-96 overflow-y-auto">
+      <p class="text-sm opacity-60 p-4 text-center">Type to search...</p>
+    </div>
+  </div>
+  <form method="dialog" class="modal-backdrop">
+    <button>close</button>
+  </form>
+</dialog>
+
+<script>
+(function() {
+  var modal = document.getElementById('docs-search-modal');
+  var input = document.getElementById('docs-search-input');
+  var results = document.getElementById('docs-search-results');
+  var index = null;
+
+  function esc(s) {
+    if (!s) return '';
+    return String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function loadIndex() {
+    if (!index) {
+      fetch('/search-index.json')
+        .then(function(r) { return r.json(); })
+        .then(function(data) { index = data; })
+        .catch(function(e) { console.error('Failed to load search index', e); });
+    }
+  }
+
+  window.addEventListener('keydown', function(e) {
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+      e.preventDefault();
+      loadIndex();
+      if (modal && modal.showModal) modal.showModal();
+      if (input) input.focus();
+    }
+  });
+
+  if (input) {
+    input.addEventListener('focus', loadIndex);
+    input.addEventListener('input', function() {
+      var q = this.value.trim().toLowerCase();
+      if (!q || !index) {
+        results.innerHTML = '<p class="text-sm opacity-60 p-4 text-center">Type to search...</p>';
+        return;
+      }
+      var matches = index.filter(function(item) {
+        return (item.title && item.title.toLowerCase().indexOf(q) !== -1) ||
+               (item.section && item.section.toLowerCase().indexOf(q) !== -1) ||
+               (item.excerpt && item.excerpt.toLowerCase().indexOf(q) !== -1) ||
+               (item.headings && item.headings.some(function(h) { return h.toLowerCase().indexOf(q) !== -1; })) ||
+               (item.tags && item.tags.some(function(t) { return t.toLowerCase().indexOf(q) !== -1; }));
+      }).slice(0, 8);
+
+      if (matches.length === 0) {
+        results.innerHTML = '<p class="text-sm opacity-60 p-4 text-center">No results found.</p>';
+        return;
+      }
+      results.innerHTML = matches.map(function(m) {
+        var href = esc(m.url);
+        var title = esc(m.title || m.url);
+        var secBadge = m.section ? '<span class="badge badge-xs badge-ghost">' + esc(m.section) + '</span>' : '';
+        var excerpt = m.excerpt ? '<div class="text-xs opacity-70 line-clamp-2 mt-1">' + esc(m.excerpt) + '</div>' : '';
+        return '<a href="' + href + '" class="block p-3 rounded-lg hover:bg-base-200 transition-colors">' +
+               '<div class="font-semibold text-sm flex items-center justify-between">' +
+               '<span>' + title + '</span>' +
+               secBadge +
+               '</div>' +
+               excerpt +
+               '</a>';
+      }).join('');
+    });
+  }
+
+  document.querySelectorAll('.highlight pre, .codehilite pre').forEach(function(pre) {
+    var wrapper = pre.parentElement;
+    if (wrapper) wrapper.style.position = 'relative';
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'btn btn-ghost btn-xs absolute top-2 right-2 opacity-60 hover:opacity-100';
+    btn.textContent = 'Copy';
+    btn.setAttribute('aria-label', 'Copy code');
+    btn.addEventListener('click', function() {
+      navigator.clipboard.writeText(pre.innerText).then(function() {
+        btn.textContent = 'Copied!';
+        setTimeout(function() { btn.textContent = 'Copy'; }, 2000);
+      });
+    });
+    (wrapper || pre).appendChild(btn);
+  });
+})();
+</script>
+{% endblock %}
