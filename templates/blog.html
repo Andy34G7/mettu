@@ -13,12 +13,18 @@
     <div class="space-y-8 mt-8">
     {% for post in posts %}
         <div class="card bg-base-200 shadow-xl">
-            <a href="{{ post.url }}/">
+            <a href="{{ post.url if post.url.endswith('/') else post.url ~ '/' }}">
             <div class="card-body">
                 <h2 class="card-title">
                     {{ post.title }}
                 </h2>
-                <p class="text-sm opacity-70">Published: {{ post.date }}</p>
+                {% if post.description %}
+                <p class="text-sm mt-1 opacity-80">{{ post.description }}</p>
+                {% endif %}
+                <p class="text-sm opacity-70 mt-2">
+                    {% if post.date %}Published: {{ post.date }}{% endif %}
+                    {% if post.reading_time %}<span>· {{ post.reading_time }} min read</span>{% endif %}
+                </p>
             </div>
             </a>
         </div>

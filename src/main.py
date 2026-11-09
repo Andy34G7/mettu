@@ -1,14 +1,14 @@
 import os
 import yaml
 import markdown
-from jinja2 import Environment, FileSystemLoader
+from jinja2 import Environment, FileSystemLoader, select_autoescape
 from datetime import date, datetime, timezone
 import argparse
 import shutil
 import json
 import re
 from collections import defaultdict
-from html import escape
+from html import escape, unescape
 from html.parser import HTMLParser
 try:
     import dotenv
@@ -542,13 +542,23 @@ def load_templates(env, template_dir=TEMPLATE_DIR, allowed_extensions=(".html", 
 
 
 def _normalize_yaml_values(obj):
-    if isinstance(obj, (datetime, date)):
+    if isinstance(obj, date):
         return obj.strftime("%Y-%m-%d")
     if isinstance(obj, dict):
         return {k: _normalize_yaml_values(v) for k, v in obj.items()}
     if isinstance(obj, list):
         return [_normalize_yaml_values(v) for v in obj]
     return obj
+
+
+def _safe_tag_slug(tag):
+    s = re.sub(r"[^a-zA-Z0-9_-]+", "-", str(tag).strip()).strip("_-")
+    return s or "tag"
+
+
+def _strip_html(html_str):
+    cleaned = re.sub(r'<a[^>]*class="headerlink"[^>]*>.*?</a>', "", html_str, flags=re.DOTALL)
+    return re.sub(r"\s+", " ", unescape(re.sub(r"<[^>]+>", " ", cleaned))).strip()
 
 
 def parse_file(filepath, pygments_theme, markdown_config=None, md=None, page_cache=None, config_hash=""):
@@ -589,25 +599,78 @@ def parse_file(filepath, pygments_theme, markdown_config=None, md=None, page_cac
         page_config = {}
         markdown_data = file_content
 
+    if "tags" in page_config:
+        page_config["tags"] = list(dict.fromkeys(
+            _safe_tag_slug(t)
+            for t in _ensure_sequence(page_config.get("tags"))
+            if str(t).strip()
+        ))
+
     if md is None:
         md = build_markdown(pygments_theme, markdown_config)
     md.reset()
     html_data = md.convert(markdown_data)
 
-    if rel_path.startswith(".."):
-        slug = os.path.splitext(os.path.basename(filepath))[0]
-        url_path = slug
-    else:
-        url_path = os.path.splitext(rel_path)[0]
+    page_config["toc"] = getattr(md, "toc", "")
+    page_config["toc_tokens"] = getattr(md, "toc_tokens", [])
 
-    url_path = url_path.replace(os.sep, "/")
+    plain_text = _strip_html(html_data)
+    word_count = len(plain_text.split())
+    page_config.setdefault("word_count", word_count)
+    page_config.setdefault("reading_time", max(1, round(word_count / 200)))
 
-    if url_path == "index":
-        page_config["url"] = "/"
-    elif url_path.endswith("/index"):
-        page_config["url"] = "/" + url_path[:-5]
-    else:
-        page_config["url"] = "/" + url_path
+    first_p = re.search(r"<p(?:\s[^>]*)?>(.*?)</p>", html_data, re.DOTALL)
+    p_text = _strip_html(first_p.group(1)) if first_p else plain_text
+    excerpt = (p_text[:157].rstrip() + "...") if len(p_text) > 160 else p_text
+    page_config.setdefault("excerpt", excerpt)
+    if not page_config.get("description") and not page_config.get("summary"):
+        page_config["description"] = excerpt
+
+    if not page_config.get("title"):
+        first_h = unescape(page_config["toc_tokens"][0]["name"]).strip() if page_config["toc_tokens"] else ""
+        if first_h:
+            html_data = re.sub(r"^\s*<h1[^>]*>.*?</h1>\s*", "", html_data, count=1, flags=re.DOTALL)
+        stem = os.path.splitext(os.path.basename(filepath))[0]
+        if stem == "index" and "/" in rel_path:
+            stem = os.path.basename(os.path.dirname(rel_path))
+        page_config["title"] = first_h or stem.replace("-", " ").replace("_", " ").title()
+
+    if not page_config.get("layout"):
+        md_cfg = markdown_config if isinstance(markdown_config, dict) else {}
+        section = rel_path.split("/", 1)[0] if "/" in rel_path else ""
+        layouts = {"posts": "post", "docs": "docs", **(md_cfg.get("default_layouts") or {})}
+        page_config["layout"] = layouts.get(section) or md_cfg.get("default_layout") or "page"
+
+    raw_url = page_config.get("permalink") if "permalink" in page_config else page_config.get("url")
+    custom_url_applied = False
+    if raw_url is not None:
+        custom_url = os.path.normpath(str(raw_url).strip().lstrip("/\\")).replace("\\", "/")
+        if custom_url.endswith(".html"):
+            custom_url = custom_url[:-5]
+        if custom_url.endswith("/index"):
+            custom_url = custom_url[:-6]
+        if custom_url in ("", ".", "index"):
+            page_config["url"] = "/"
+            custom_url_applied = True
+        elif not custom_url.startswith("..") and custom_url.split("/")[0] not in PRESERVED_ROOTS and custom_url.split("/")[0] != "tags":
+            page_config["url"] = "/" + custom_url.strip("/")
+            custom_url_applied = True
+
+    if not custom_url_applied:
+        if rel_path.startswith(".."):
+            slug = os.path.splitext(os.path.basename(filepath))[0]
+            url_path = slug
+        else:
+            url_path = os.path.splitext(rel_path)[0]
+
+        url_path = url_path.replace(os.sep, "/")
+
+        if url_path == "index":
+            page_config["url"] = "/"
+        elif url_path.endswith("/index"):
+            page_config["url"] = "/" + url_path[:-5]
+        else:
+            page_config["url"] = "/" + url_path
 
     # Normalize date to YYYY-MM-DD string
     if "date" in page_config and page_config["date"]:
@@ -671,6 +734,8 @@ def render_page(
     **context_data,
 ):
     layout = page_config.get("layout") or "post"
+    if layout == "page" and layout not in templates and "post" in templates:
+        layout = "post"
     if layout not in templates:
         available = ", ".join(sorted(templates.keys())) or "none"
         print(
@@ -1013,16 +1078,23 @@ def main():
         return
 
     site_config, pygments_theme = generate_styles()
-    env = Environment(loader=FileSystemLoader(TEMPLATE_DIR))
+    env = Environment(
+        loader=FileSystemLoader(TEMPLATE_DIR),
+        autoescape=select_autoescape(["html", "htm", "xml", "j2"]),
+    )
     templates = load_templates(env)
     image_manifest = load_image_manifest()
     page_cache = load_page_cache()
+    md_config = dict(site_config.get("markdown") or {})
+    for k in ("default_layout", "default_layouts"):
+        if k not in md_config and site_config.get(k):
+            md_config[k] = site_config[k]
     config_hash = json.dumps(
-        {"theme": pygments_theme, "md": site_config.get("markdown")},
+        {"theme": pygments_theme, "md": md_config},
         sort_keys=True,
         default=str,
     )
-    md = build_markdown(pygments_theme, site_config.get("markdown"))
+    md = build_markdown(pygments_theme, md_config)
 
     if args.file:
         print(f"Change detected in {args.file}, proceeding to rebuild...")
@@ -1052,7 +1124,7 @@ def main():
             page_data, html_content = parse_file(
                 filepath,
                 pygments_theme,
-                site_config.get("markdown"),
+                md_config,
                 md=md,
                 page_cache=page_cache,
                 config_hash=config_hash,
@@ -1062,7 +1134,7 @@ def main():
             if str(page_data.get("draft")).lower() in ("true", "1", "yes"):
                 continue
             
-            slug_key = os.path.splitext(rel_path)[0]
+            slug_key = page_data["url"].lstrip("/") or "index"
             current_slugs.add(slug_key)
 
             pages.append({"data": page_data, "content": html_content})
@@ -1079,9 +1151,8 @@ def main():
             if layout:
                 collections[layout].append(page_data)
                 
-                if layout == "post":
-                    for tag in page_data.get("tags") or []:
-                         tags.setdefault(tag, []).append(page_data)
+            for tag in page_data.get("tags") or []:
+                tags.setdefault(tag, []).append(page_data)
 
     removed = previous_slugs - current_slugs
     for slug in removed:
@@ -1094,10 +1165,13 @@ def main():
          top_level = slug.lstrip("/").split("/")[0]
          if not top_level or top_level in PRESERVED_ROOTS:
              continue
-         out_dir = os.path.join(OUTPUT_DIR, slug)
-         if os.path.isdir(out_dir):
-             shutil.rmtree(out_dir, ignore_errors=True)
-             print(f"Removed stale page directory: {out_dir}")
+         out_path = os.path.join(OUTPUT_DIR, slug)
+         if os.path.isdir(out_path):
+             shutil.rmtree(out_path, ignore_errors=True)
+             print(f"Removed stale page directory: {out_path}")
+         elif os.path.isfile(out_path):
+             os.remove(out_path)
+             print(f"Removed stale page file: {out_path}")
 
     for k in set(page_cache) - seen_rel_paths:
         del page_cache[k]
@@ -1123,6 +1197,7 @@ def main():
             items.sort(key=lambda x: x.get("order", 999))
 
     context_data = {f"{k.replace('-', '_')}s": v for k, v in collections.items()}
+    context_data["all_tags"] = tags
 
     for page in pages:
         render_page(

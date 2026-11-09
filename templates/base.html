@@ -7,8 +7,23 @@ site.theme.default is defined else (site.theme if site.theme is defined else "dr
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{{ page.title }} | {{ site.site_name }}</title>
+  <meta name="description" content="{{ (page.description or site.description or site.site_name) | e }}">
+  <meta property="og:title" content="{{ (page.title or site.site_name) | e }}">
+  <meta property="og:description" content="{{ (page.description or site.description or site.site_name) | e }}">
+  <meta property="og:type" content="{{ 'article' if page.layout == 'post' else 'website' }}">
+  <link rel="alternate" type="application/atom+xml" title="{{ site.site_name | e }}" href="/feed.xml">
   <link rel="stylesheet" href="/assets/css/main.css">
   <link rel="stylesheet" href="/assets/css/syntax.css">
+  {% if site.theme is defined and site.theme.include is defined and (site.theme.include | length) > 1 %}
+  <script>
+    (function() {
+      try {
+        var saved = localStorage.getItem('mettu-theme');
+        if (saved) document.documentElement.setAttribute('data-theme', saved);
+      } catch (e) {}
+    })();
+  </script>
+  {% endif %}
 </head>
 
 <body class="pt-24 min-h-screen flex flex-col">
@@ -16,12 +31,33 @@ site.theme.default is defined else (site.theme if site.theme is defined else "dr
     <div class="flex-1">
       <a href="/" class="btn btn-ghost text-xl">{{ site.site_name }}</a>
     </div>
-    <div class="flex-none">
+    <div class="flex-none flex items-center">
       <ul class="menu menu-horizontal px-1">
-        {% for item in site.navigation %}
+        {% for item in site.navigation or [] %}
         <li><a href="{{ item.url }}">{{ item.name }}</a></li>
         {% endfor %}
       </ul>
+      {% if site.theme is defined and site.theme.include is defined and (site.theme.include | length) > 1 %}
+      <select data-choose-theme class="select select-bordered select-xs ml-2" aria-label="Select theme">
+        {% for theme_name in site.theme.include %}
+        <option value="{{ theme_name }}"{% if theme_name == active_theme %} selected{% endif %}>{{ theme_name }}</option>
+        {% endfor %}
+      </select>
+      <script>
+        (function() {
+          try {
+            var select = document.querySelector('select[data-choose-theme]');
+            if (!select) return;
+            var current = localStorage.getItem('mettu-theme') || document.documentElement.getAttribute('data-theme');
+            if (current) select.value = current;
+            select.addEventListener('change', function() {
+              document.documentElement.setAttribute('data-theme', this.value);
+              localStorage.setItem('mettu-theme', this.value);
+            });
+          } catch (e) {}
+        })();
+      </script>
+      {% endif %}
     </div>
   </div>
 
