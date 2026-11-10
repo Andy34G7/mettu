@@ -174,6 +174,11 @@ const py_build_plugin = () => {
         fs.copyFileSync(relPath, destPath);
       }
 
+      const searchIndex = 'search-index.json';
+      if (fs.existsSync(searchIndex)) {
+        fs.copyFileSync(searchIndex, path.join('./dist', searchIndex));
+      }
+
       console.log('Cleaning up root directory...');
       try {
         const output = execFileSync(pythonExecutable, ['src/main.py', '--clean']);

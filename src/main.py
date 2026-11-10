@@ -1,7 +1,7 @@
 import os
 import sys
 
-if sys.prefix == sys.base_prefix:
+if __name__ == "__main__" and sys.prefix == sys.base_prefix:
     for _venv_py in (".venv/bin/python", ".venv/Scripts/python.exe"):
         if os.path.exists(_venv_py):
             os.execv(_venv_py, [_venv_py, *sys.argv])
@@ -501,6 +501,7 @@ def build_markdown(pygments_theme, markdown_config=None):
             "guess_lang": False,
             "noclasses": False,
             "pygments_style": pygments_theme,
+            "css_class": "highlight",
         }
     }
 
@@ -580,6 +581,58 @@ def _strip_html(html_str):
     return re.sub(r"\s+", " ", unescape(re.sub(r"<[^>]+>", " ", cleaned))).strip()
 
 
+def _clean_toc_tokens(tokens):
+    cleaned = []
+    for t in tokens or []:
+        if isinstance(t, dict):
+            cleaned.append({
+                **t,
+                "name": _strip_html(str(t.get("name", ""))),
+                "children": _clean_toc_tokens(t.get("children") or []),
+            })
+    return cleaned
+
+
+def _flatten_toc_headings(tokens):
+    names = []
+    for t in tokens or []:
+        if isinstance(t, dict):
+            if t.get("name"):
+                names.append(t["name"])
+            names.extend(_flatten_toc_headings(t.get("children") or []))
+    return names
+
+
+CALLOUT_STYLES = {
+    "NOTE": ("alert-info", "Note"),
+    "TIP": ("alert-success", "Tip"),
+    "IMPORTANT": ("alert-secondary", "Important"),
+    "WARNING": ("alert-warning", "Warning"),
+    "CAUTION": ("alert-error", "Caution"),
+}
+
+
+def _render_callouts(html_str):
+    def _repl(match):
+        kind = match.group(1).upper()
+        first_body = match.group(2).strip()
+        rest_body = match.group(3).strip()
+        cls, label = CALLOUT_STYLES.get(kind, ("alert-info", kind.title()))
+        inner = f"<p>{first_body}</p>{rest_body}" if first_body else rest_body
+        return (
+            f'<div role="note" class="alert {cls} my-4 not-prose">'
+            f'<div><div class="font-bold text-sm uppercase tracking-wide">{label}</div>'
+            f'<div class="text-sm mt-1">{inner}</div></div></div>'
+        )
+
+    return re.sub(
+        r"<blockquote>\s*<p>\s*\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\](?:<br\s*/?>|\s*\n|\s+)?(.*?)</p>\s*(.*?)</blockquote>",
+        _repl,
+        html_str,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+
+
 def parse_file(filepath, pygments_theme, markdown_config=None, md=None, page_cache=None, config_hash="", content_dir=CONTENT_DIR):
     rel_path = os.path.relpath(filepath, content_dir).replace(os.sep, "/")
     try:
@@ -595,7 +648,9 @@ def parse_file(filepath, pygments_theme, markdown_config=None, md=None, page_cac
             and cached.get("size") == st.st_size
             and cached.get("config_hash") == config_hash
         ):
-            return dict(cached["page_data"]), cached["html_content"]
+            c_data = dict(cached["page_data"])
+            c_data["_rel_path"] = rel_path
+            return c_data, cached["html_content"]
 
     try:
         with open(filepath, "r", encoding="utf-8") as f:
@@ -626,6 +681,8 @@ def parse_file(filepath, pygments_theme, markdown_config=None, md=None, page_cac
         page_config = {}
         markdown_data = file_content
 
+    page_config["_rel_path"] = rel_path
+
     if "tags" in page_config:
         page_config["tags"] = list(dict.fromkeys(
             _safe_tag_slug(t)
@@ -637,9 +694,10 @@ def parse_file(filepath, pygments_theme, markdown_config=None, md=None, page_cac
         md = build_markdown(pygments_theme, markdown_config)
     md.reset()
     html_data = md.convert(markdown_data)
+    html_data = _render_callouts(html_data)
 
     page_config["toc"] = getattr(md, "toc", "")
-    page_config["toc_tokens"] = getattr(md, "toc_tokens", [])
+    page_config["toc_tokens"] = _clean_toc_tokens(getattr(md, "toc_tokens", []))
 
     plain_text = _strip_html(html_data)
     word_count = len(plain_text.split())
@@ -654,9 +712,11 @@ def parse_file(filepath, pygments_theme, markdown_config=None, md=None, page_cac
         page_config["description"] = excerpt
 
     if not page_config.get("title"):
-        first_h = unescape(page_config["toc_tokens"][0]["name"]).strip() if page_config["toc_tokens"] else ""
+        toks = page_config["toc_tokens"]
+        first_h = toks[0]["name"].strip() if (toks and toks[0].get("level") == 1) else ""
         if first_h:
             html_data = re.sub(r"^\s*<h1[^>]*>.*?</h1>\s*", "", html_data, count=1, flags=re.DOTALL)
+            page_config["toc_tokens"] = (toks[0].get("children") or []) + toks[1:]
         stem = os.path.splitext(os.path.basename(filepath))[0]
         if stem == "index" and "/" in rel_path:
             stem = os.path.basename(os.path.dirname(rel_path))
@@ -719,6 +779,60 @@ def parse_file(filepath, pygments_theme, markdown_config=None, md=None, page_cac
         }
 
     return page_config, html_data
+
+
+def _safe_order(val, default=999):
+    try:
+        return float(val) if val is not None else default
+    except (ValueError, TypeError):
+        return default
+
+
+def build_docs_navigation(docs_pages):
+    if not docs_pages:
+        return [], []
+
+    for page in docs_pages:
+        rel = page.get("_rel_path", "").removeprefix("docs/")
+        default_sec = rel.split("/", 1)[0].replace("-", " ").replace("_", " ").title() if "/" in rel else "Overview"
+        page["section"] = str(page.get("section") or "").strip() or default_sec
+
+    def _doc_sort_key(page):
+        is_root = page.get("url") in ("/docs", "/docs/") or page.get("_rel_path") == "docs/index.md"
+        return (_safe_order(page.get("order"), 0 if is_root else 999), page.get("title", "").lower(), page.get("url", ""))
+
+    sections = defaultdict(list)
+    for page in docs_pages:
+        sections[page["section"]].append(page)
+
+    for sec_title in sections:
+        sections[sec_title].sort(key=_doc_sort_key)
+
+    def _section_sort_key(sec_title):
+        if sec_title == "Overview":
+            return (-1, "")
+        items = sections[sec_title]
+        min_order = min(_doc_sort_key(p)[0] for p in items) if items else 999
+        return (min_order, sec_title.lower())
+
+    sorted_sec_titles = sorted(sections.keys(), key=_section_sort_key)
+    docs_tree = [{"title": st, "items": sections[st]} for st in sorted_sec_titles]
+    ordered_docs = [item for sec in docs_tree for item in sec["items"]]
+
+    def _nav_link(p):
+        return {"title": p.get("title", ""), "url": p.get("url", ""), "section": p.get("section", "")}
+
+    for i, doc in enumerate(ordered_docs):
+        doc["prev_page"] = _nav_link(ordered_docs[i - 1]) if i > 0 else None
+        doc["next_page"] = _nav_link(ordered_docs[i + 1]) if i + 1 < len(ordered_docs) else None
+        crumbs = [{"name": "Docs", "url": "/docs/"}]
+        if doc.get("section") and doc["section"] != "Overview":
+            crumbs.append({"name": doc["section"], "url": None})
+        if doc.get("url") not in ("/docs", "/docs/"):
+            crumbs.append({"name": doc.get("title", ""), "url": doc.get("url")})
+        doc["breadcrumbs"] = crumbs
+
+    return docs_tree, ordered_docs
 
 
 def tag_pages(tag_template, site_config, tags=None, image_manifest=None):
@@ -1393,10 +1507,16 @@ def main():
                 reverse=True,
             )
         elif has_order:
-            items.sort(key=lambda x: x.get("order", 999))
+            items.sort(key=lambda x: _safe_order(x.get("order"), 999))
+
+    docs_tree, ordered_docs = build_docs_navigation(collections.get("docs", []))
+    if ordered_docs:
+        collections["docs"] = ordered_docs
 
     context_data = {f"{k.replace('-', '_')}s": v for k, v in collections.items()}
     context_data["all_tags"] = tags
+    context_data["docs_tree"] = docs_tree
+    context_data["docs"] = ordered_docs
 
     for page in pages:
         render_page(
@@ -1407,6 +1527,20 @@ def main():
             image_manifest=image_manifest,
             **context_data
         )
+
+    search_index = [
+        {
+            "title": p["data"].get("title", ""),
+            "url": p["data"]["url"] if p["data"]["url"].endswith("/") else p["data"]["url"] + "/",
+            "section": p["data"].get("section", ""),
+            "layout": p["data"].get("layout", ""),
+            "tags": p["data"].get("tags") or [],
+            "headings": _flatten_toc_headings(p["data"].get("toc_tokens")),
+            "excerpt": p["data"].get("description") or p["data"].get("excerpt", ""),
+        }
+        for p in pages
+    ]
+    _write_if_changed(os.path.join(OUTPUT_DIR, "search-index.json"), json.dumps(search_index, ensure_ascii=False))
 
     tag_template = templates.get("tags") or templates.get("tags.html")
     if tag_template:
