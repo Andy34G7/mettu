@@ -5,7 +5,9 @@
     <header>
         <h1 class="mb-2">{{ page.title }}</h1>
         {% if page.date %}
-        <p class="text-sm opacity-70">Published on: {{ page.date }}</p>
+        <p class="text-sm opacity-70">Published on: {{ page.date }} {% if page.reading_time %}<span>· {{ page.reading_time }} min read</span>{% endif %}</p>
+        {% elif page.reading_time %}
+        <p class="text-sm opacity-70"><span>{{ page.reading_time }} min read</span></p>
         {% endif %}
         {% if page.tags %}
         <p class="text-sm mt-2">
@@ -14,6 +16,12 @@
             <a class="badge badge-sm" href="/tags/{{ tag }}.html">{{ tag }}</a>
             {% endfor %}
         </p>
+        {% endif %}
+        {% if page.show_toc and page.toc %}
+        <details class="collapse collapse-arrow bg-base-200 my-4">
+            <summary class="collapse-title font-medium">Table of Contents</summary>
+            <div class="collapse-content">{{ page.toc | safe }}</div>
+        </details>
         {% endif %}
         <hr>
     </header>

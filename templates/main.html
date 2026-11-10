@@ -11,7 +11,7 @@
         <p class="py-6">{{ page.hero_subtitle | e }}</p>
 
         <div class="join">
-            {% for link in page.social_links %}
+            {% for link in page.social_links or [] %}
                 <a href="{{ link.url }}" class="btn btn-ghost btn-square join-item" aria-label="{{ link.name }}">
                     {# Dynamically include the SVG file based on the 'icon' key #}
                     {% if link.icon %}
