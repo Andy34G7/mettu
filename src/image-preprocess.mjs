@@ -61,23 +61,48 @@ export async function processImages(inputDir, outputDir, siteConfig = {}) {
 
     // { originalFile: { format: [{ width, path }] } }
     const manifest = {};
+    const metaCachePath = '.cache/image-meta.json';
+    let metaCache = {};
+    if (fsSync.existsSync(metaCachePath)) {
+        try {
+            metaCache = JSON.parse(fsSync.readFileSync(metaCachePath, 'utf8'));
+        } catch (_) {}
+    }
+    const nextMetaCache = {};
 
     for (const file of files) {
         const inputPath = path.join(inputDir, file);
-        let meta;
+        const manifestKey = file.split(path.sep).join('/');
+        let origWidth;
+        let isCacheHit = false;
+
         try {
-            meta = await sharp(inputPath).metadata();
+            const stat = await fs.stat(inputPath);
+            if (!stat.isFile()) continue;
+
+            const cached = metaCache[manifestKey];
+            if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size && cached.width) {
+                origWidth = cached.width;
+                isCacheHit = true;
+                nextMetaCache[manifestKey] = cached;
+            } else {
+                const meta = await sharp(inputPath).metadata();
+                origWidth = meta.width || Math.max(...TARGET_WIDTHS);
+                nextMetaCache[manifestKey] = {
+                    mtimeMs: stat.mtimeMs,
+                    size: stat.size,
+                    width: origWidth,
+                };
+            }
         } catch (e) {
             console.error(`[img] metadata fail ${file}: ${e.message}`);
             continue;
         }
 
-        const origWidth = meta.width || Math.max(...TARGET_WIDTHS);
         const widths = [...new Set(
             TARGET_WIDTHS.filter(w => w <= origWidth).concat([origWidth])
         )].sort((a, b) => a - b);
 
-        const manifestKey = file.split(path.sep).join('/');
         const baseName = manifestKey.replace(/\.(png|jpe?g|gif)$/i, '');
 
         // Ensure entry exists
@@ -112,7 +137,7 @@ export async function processImages(inputDir, outputDir, siteConfig = {}) {
 
                 try {
                     // Always regenerate local file to ensure it exists for upload
-                    if (!fsSync.existsSync(outPath)) {
+                    if (!isCacheHit || !fsSync.existsSync(outPath)) {
                          await handler(sharp(inputPath).resize({ width: w })).toFile(outPath);
                          console.log(`[img] processed local ${file} -> ${outFile}`);
                     }
@@ -148,25 +173,17 @@ export async function processImages(inputDir, outputDir, siteConfig = {}) {
                          );
                     }
 
-                    (manifest[manifestKey][ext] ||= []);
-                    // Remove existing entry for this width and format to replace it
-                    const existingIdx = manifest[manifestKey][ext].findIndex(x => x.width === w);
-                    if (existingIdx !== -1) {
-                         manifest[manifestKey][ext][existingIdx] = { width: w, path: publicUrl };
-                    } else {
-                         manifest[manifestKey][ext].push({ width: w, path: publicUrl });
-                    }
+                    (manifest[manifestKey][ext] ||= []).push({ width: w, path: publicUrl });
 
                 } catch (e) {
                     console.error(`[img] fail ${file} (${w}px ${ext}): ${e.message}`);
                 }
             }
         }
-        // Sort each format list by width ascending
-        Object.values(manifest[manifestKey]).forEach(arr => arr.sort((a, b) => a.width - b.width));
     }
 
     fsSync.mkdirSync('.cache', { recursive: true });
+    fsSync.writeFileSync(metaCachePath, JSON.stringify(nextMetaCache, null, 2));
     fsSync.writeFileSync('.cache/image-manifest.json', JSON.stringify(manifest, null, 2));
     return manifest;
 }

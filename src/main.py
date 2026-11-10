@@ -5,7 +5,6 @@ from jinja2 import Environment, FileSystemLoader
 from datetime import date, datetime, timezone
 import argparse
 import shutil
-import hashlib
 import json
 import re
 from collections import defaultdict
@@ -27,6 +26,7 @@ IMAGES_DIR = "assets/images"
 CONTENT_DIR = "content"
 
 PAGE_SLUG_CACHE = ".cache/page-slugs.json"
+PAGE_PARSE_CACHE = ".cache/page-cache.json"
 IMAGE_MANIFEST_PATH = ".cache/image-manifest.json"
 GENERATED_THEME_PATH = "assets/css/generated.daisyui.css"
 GENERATED_FONTS_PATH = "assets/css/generated.fonts.css"
@@ -79,6 +79,44 @@ def save_current_slugs(slugs):
         print(f"Warning: Could not save slug cache: {e}")
 
 
+def load_page_cache():
+    try:
+        with open(PAGE_PARSE_CACHE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def save_page_cache(cache):
+    os.makedirs(os.path.dirname(PAGE_PARSE_CACHE), exist_ok=True)
+    try:
+        payload = json.dumps(cache, default=str)
+        with open(PAGE_PARSE_CACHE, "w", encoding="utf-8") as f:
+            f.write(payload)
+    except (OSError, TypeError) as e:
+        print(f"Warning: Could not save page parse cache: {e}")
+
+
+def _write_if_changed(path, content):
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                if f.read() == content:
+                    return False
+        except OSError:
+            pass
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(content)
+        return True
+    except OSError as e:
+        print(f"Error: Failed to write {path}: {e}")
+        return False
+
+
 def clean_output(directory):
     print("Cleaning old build files...")
     for name in os.listdir(directory):
@@ -97,24 +135,6 @@ def clean_output(directory):
             print(f"Failed to delete {path}: {e}")
 
     print("Cleanup complete.")
-
-
-def has_file_changed(filepath, cache_dir=".cache"):
-    os.makedirs(cache_dir, exist_ok=True)
-    rel = os.path.relpath(filepath)
-    file_hash = hashlib.md5(open(filepath, "rb").read()).hexdigest()
-    safe_name = rel.replace(os.sep, "__") + ".hash"
-    cache_file = os.path.join(cache_dir, safe_name)
-
-    if os.path.exists(cache_file):
-        with open(cache_file, "r", encoding="utf-8") as f:
-            cached_hash = f.read().strip()
-        if cached_hash == file_hash:
-            return False
-
-    with open(cache_file, "w", encoding="utf-8") as f:
-        f.write(file_hash)
-    return True
 
 
 def safe_parse_date(date_value):
@@ -223,17 +243,7 @@ def normalize_theme_config(config):
 
 def write_theme_file(config, output_path=GENERATED_THEME_PATH):
     theme = config.get("theme") or {}
-    include = theme.get("include") or []
-    include_list = _ensure_sequence(include)
-
-    names = []
-    seen = set()
-    for entry in include_list:
-        name = str(entry).strip()
-        if not name or name in seen:
-            continue
-        names.append(name)
-        seen.add(name)
+    names = theme.get("include") or []
 
     css_blocks = []
     if names:
@@ -258,29 +268,25 @@ def write_theme_file(config, output_path=GENERATED_THEME_PATH):
         if isinstance(values, str):
             # Raw css mode
             # We still need to provide name and default properties for daisyui plugin to work
-             lines.append(f"  name: {_format_css_scalar(name)};")
-             lines.append(f"  default: {_format_css_scalar(is_default)};")
-             lines.append(values)
+            lines.append(f"  name: {_format_css_scalar(name)};")
+            lines.append(f"  default: {_format_css_scalar(is_default)};")
+            lines.append(values)
         elif isinstance(values, dict):
-             seen_keys = set()
-             
-             theme_name = values.get("name") if isinstance(values.get("name"), str) else None
-             theme_name = theme_name.strip() if theme_name else name
-             lines.append(f"  name: {_format_css_scalar(theme_name)};")
-             seen_keys.add("name")
+            seen_keys = set()
+            
+            theme_name = values.get("name") if isinstance(values.get("name"), str) else None
+            theme_name = theme_name.strip() if theme_name else name
+            lines.append(f"  name: {_format_css_scalar(theme_name)};")
+            seen_keys.add("name")
 
-             if "default" in values:
-                 lines.append(f"  default: {_format_css_scalar(values['default'])};")
-                 seen_keys.add("default")
-             else:
-                 lines.append(f"  default: {_format_css_scalar(is_default)};")
-                 seen_keys.add("default")
+            lines.append(f"  default: {_format_css_scalar(values.get('default', is_default))};")
+            seen_keys.add("default")
 
-             for key, value in values.items():
-                 if key in seen_keys:
-                     continue
-                 lines.append(f"  {key}: {_format_css_scalar(value)};")
-                 seen_keys.add(key)
+            for key, value in values.items():
+                if key in seen_keys:
+                    continue
+                lines.append(f"  {key}: {_format_css_scalar(value)};")
+                seen_keys.add(key)
         else:
             continue
 
@@ -288,12 +294,7 @@ def write_theme_file(config, output_path=GENERATED_THEME_PATH):
         css_blocks.append("\n".join(lines))
 
     css_content = "\n\n".join(css_blocks) + "\n"
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    try:
-        with open(output_path, "w", encoding="utf-8") as f:
-            f.write(css_content)
-    except OSError as e:
-        print(f"Error: Failed to write theme file {output_path}: {e}")
+    _write_if_changed(output_path, css_content)
 
 
 def _normalize_font_family(value):
@@ -409,13 +410,7 @@ def write_font_file(config, output_path=GENERATED_FONTS_PATH):
     lines.append("")
 
     css_output = "\n".join(lines).rstrip() + "\n"
-
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    try:
-        with open(output_path, "w", encoding="utf-8") as f:
-            f.write(css_output)
-    except OSError as e:
-        print(f"Error: Failed to write font file {output_path}: {e}")
+    _write_if_changed(output_path, css_output)
 
 
 def resolve_pygments_theme(config):
@@ -456,13 +451,8 @@ def generate_syntax_css(theme, output_path=GENERATED_SYNTAX_PATH):
         formatter = HtmlFormatter(style=fallback)
         active_theme = fallback
 
-    css = formatter.get_style_defs(".highlight")
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    try:
-        with open(output_path, "w", encoding="utf-8") as f:
-            f.write(css + "\n")
-    except OSError as e:
-        print(f"Error: Failed to write syntax CSS {output_path}: {e}")
+    css = formatter.get_style_defs(".highlight") + "\n"
+    _write_if_changed(output_path, css)
     return active_theme
 
 
@@ -551,7 +541,33 @@ def load_templates(env, template_dir=TEMPLATE_DIR, allowed_extensions=(".html", 
     return templates
 
 
-def parse_file(filepath, pygments_theme, markdown_config=None):
+def _normalize_yaml_values(obj):
+    if isinstance(obj, (datetime, date)):
+        return obj.strftime("%Y-%m-%d")
+    if isinstance(obj, dict):
+        return {k: _normalize_yaml_values(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_normalize_yaml_values(v) for v in obj]
+    return obj
+
+
+def parse_file(filepath, pygments_theme, markdown_config=None, md=None, page_cache=None, config_hash=""):
+    rel_path = os.path.relpath(filepath, CONTENT_DIR).replace(os.sep, "/")
+    try:
+        st = os.stat(filepath)
+    except OSError:
+        st = None
+
+    if page_cache is not None and st is not None:
+        cached = page_cache.get(rel_path)
+        if (
+            cached
+            and cached.get("mtime_ns") == st.st_mtime_ns
+            and cached.get("size") == st.st_size
+            and cached.get("config_hash") == config_hash
+        ):
+            return dict(cached["page_data"]), cached["html_content"]
+
     try:
         with open(filepath, "r", encoding="utf-8") as f:
             file_content = f.read()
@@ -563,6 +579,7 @@ def parse_file(filepath, pygments_theme, markdown_config=None):
         try:
             parts = file_content.split("---", 2)
             page_config = yaml.safe_load(parts[1]) or {}
+            page_config = _normalize_yaml_values(page_config)
             markdown_data = parts[2]
         except (IndexError, yaml.YAMLError) as e:
             print(f"Error parsing YAML frontmatter in {filepath}: {e}")
@@ -572,26 +589,22 @@ def parse_file(filepath, pygments_theme, markdown_config=None):
         page_config = {}
         markdown_data = file_content
 
-    md = build_markdown(pygments_theme, markdown_config)
-    html_data = md.convert(markdown_data)
+    if md is None:
+        md = build_markdown(pygments_theme, markdown_config)
     md.reset()
+    html_data = md.convert(markdown_data)
 
-    rel_path = os.path.relpath(filepath, CONTENT_DIR)
-    
     if rel_path.startswith(".."):
-         # Fallback to simple filename based slug for safety or treat as root
-         slug = os.path.splitext(os.path.basename(filepath))[0]
-         url_path = slug
+        slug = os.path.splitext(os.path.basename(filepath))[0]
+        url_path = slug
     else:
-         url_path = os.path.splitext(rel_path)[0]
+        url_path = os.path.splitext(rel_path)[0]
 
-    # Normalize Windows paths
     url_path = url_path.replace(os.sep, "/")
 
     if url_path == "index":
         page_config["url"] = "/"
     elif url_path.endswith("/index"):
-        # e.g. sub/index -> /sub/
         page_config["url"] = "/" + url_path[:-5]
     else:
         page_config["url"] = "/" + url_path
@@ -606,13 +619,29 @@ def parse_file(filepath, pygments_theme, markdown_config=None):
 
     page_config["content_html"] = html_data
 
+    if page_cache is not None and st is not None:
+        page_cache[rel_path] = {
+            "mtime_ns": st.st_mtime_ns,
+            "size": st.st_size,
+            "config_hash": config_hash,
+            "page_data": dict(page_config),
+            "html_content": html_data,
+        }
+
     return page_config, html_data
 
 
 def tag_pages(tag_template, site_config, tags=None, image_manifest=None):
     tags = tags or {}
     tags_dir = os.path.join(OUTPUT_DIR, "tags")
-    os.makedirs(tags_dir, exist_ok=True)
+
+    if os.path.isdir(tags_dir):
+        for fname in os.listdir(tags_dir):
+            if fname.endswith(".html") and fname[:-5] not in tags:
+                try:
+                    os.remove(os.path.join(tags_dir, fname))
+                except OSError:
+                    pass
 
     for tag_name, posts_with_tag in tags.items():
         posts_with_tag.sort(
@@ -629,12 +658,8 @@ def tag_pages(tag_template, site_config, tags=None, image_manifest=None):
         )
         tag_page_html = replace_images_with_processed(tag_page_html, image_manifest)
         output_path = os.path.join(tags_dir, f"{tag_name}.html")
-        try:
-            with open(output_path, "w", encoding="utf-8") as f:
-                f.write(tag_page_html)
+        if _write_if_changed(output_path, tag_page_html):
             print(f"Generated tag page: tags/{tag_name}.html")
-        except OSError as e:
-            print(f"Error: Failed to write tag page {output_path}: {e}")
 
 
 def render_page(
@@ -668,15 +693,10 @@ def render_page(
             OUTPUT_DIR, page_config["url"].lstrip("/"), "index.html"
         )
 
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    try:
-        with open(output_path, "w", encoding="utf-8") as f:
-            f.write(final_html)
+    if _write_if_changed(output_path, final_html):
         print(
             f"Generated: {page_config['url'] if page_config['url'] != '/' else '/index.html'}"
         )
-    except OSError as e:
-        print(f"Error: Failed to write page {output_path}: {e}")
 
 
 
@@ -952,7 +972,8 @@ def generate_feeds(collections, site_config, env):
             print(f"Warning: Skipping unsafe feed filename: {filename}")
             continue
         out_path = os.path.join(OUTPUT_DIR, clean_rel)
-        os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
+
+        feed_updated = entries[0]["date_iso"] if entries else "1970-01-01T00:00:00+00:00"
 
         try:
             rendered = feed_tmpl.render(
@@ -962,11 +983,10 @@ def generate_feeds(collections, site_config, env):
                 feed_subtitle=subtitle,
                 feed_self_url="/" + clean_rel.lstrip("/"),
                 feed_alt_url="/",
-                build_time=build_time,
+                build_time=feed_updated,
             )
-            with open(out_path, "w", encoding="utf-8") as f:
-                f.write(rendered)
-            print(f"Generated feed: {filename} ({len(entries)} entries)")
+            if _write_if_changed(out_path, rendered):
+                print(f"Generated feed: {filename} ({len(entries)} entries)")
         except Exception as e:
             print(f"Error: Failed to generate feed {filename}: {e}")
 
@@ -996,162 +1016,142 @@ def main():
     env = Environment(loader=FileSystemLoader(TEMPLATE_DIR))
     templates = load_templates(env)
     image_manifest = load_image_manifest()
+    page_cache = load_page_cache()
+    config_hash = json.dumps(
+        {"theme": pygments_theme, "md": site_config.get("markdown")},
+        sort_keys=True,
+        default=str,
+    )
+    md = build_markdown(pygments_theme, site_config.get("markdown"))
 
     if args.file:
         print(f"Change detected in {args.file}, proceeding to rebuild...")
-        if not os.path.exists(args.file):
-            rel = os.path.relpath(args.file, CONTENT_DIR).replace(os.sep, "/")
-            slug = os.path.splitext(rel)[0]
-            top_level = slug.lstrip("/").split("/")[0]
-            if top_level and top_level != "index" and top_level not in PRESERVED_ROOTS:
-                out_dir = os.path.join(OUTPUT_DIR, slug)
-                if os.path.isdir(out_dir):
-                    shutil.rmtree(out_dir)
-                    print(f"Removed deleted page output: {out_dir}")
+    else:
+        print("Running a full build...")
+        clean_output(OUTPUT_DIR)
 
-            if os.path.exists(PAGE_SLUG_CACHE):
-                os.remove(PAGE_SLUG_CACHE)
-            return
+    sitemap_list = []
+    pages = []
+    tags = {}
 
-        if not has_file_changed(args.file):
-            print(
-                f"No changes detected in {args.file} based on cache; rebuilding anyway."
+    current_slugs = set()
+    previous_slugs = load_previous_slugs()
+
+    collections = defaultdict(list)
+    seen_rel_paths = set()
+
+    for root, _, files in os.walk(CONTENT_DIR):
+        for filename in files:
+            if not filename.endswith(".md"):
+                continue
+            
+            filepath = os.path.join(root, filename)
+            rel_path = os.path.relpath(filepath, CONTENT_DIR).replace(os.sep, "/")
+            seen_rel_paths.add(rel_path)
+
+            page_data, html_content = parse_file(
+                filepath,
+                pygments_theme,
+                site_config.get("markdown"),
+                md=md,
+                page_cache=page_cache,
+                config_hash=config_hash,
             )
+            if not page_data:
+                continue
+            if str(page_data.get("draft")).lower() in ("true", "1", "yes"):
+                continue
+            
+            slug_key = os.path.splitext(rel_path)[0]
+            current_slugs.add(slug_key)
 
-        page_data, html_content = parse_file(
-            args.file, pygments_theme, site_config.get("markdown")
-        )
-        if page_data is None or html_content is None:
-            return
+            pages.append({"data": page_data, "content": html_content})
+
+            lastmod = page_data.get("date")
+            if not lastmod:
+                try:
+                    lastmod = datetime.fromtimestamp(os.path.getmtime(filepath)).strftime("%Y-%m-%d")
+                except OSError:
+                    lastmod = datetime.now().strftime("%Y-%m-%d")
+            sitemap_list.append({"url": page_data["url"], "lastmod": lastmod})
+            
+            layout = page_data.get("layout")
+            if layout:
+                collections[layout].append(page_data)
+                
+                if layout == "post":
+                    for tag in page_data.get("tags") or []:
+                         tags.setdefault(tag, []).append(page_data)
+
+    removed = previous_slugs - current_slugs
+    for slug in removed:
+         if slug == "index":
+             index_path = os.path.join(OUTPUT_DIR, "index.html")
+             if os.path.isfile(index_path):
+                 os.remove(index_path)
+                 print(f"Removed deleted page output: {index_path}")
+             continue
+         top_level = slug.lstrip("/").split("/")[0]
+         if not top_level or top_level in PRESERVED_ROOTS:
+             continue
+         out_dir = os.path.join(OUTPUT_DIR, slug)
+         if os.path.isdir(out_dir):
+             shutil.rmtree(out_dir, ignore_errors=True)
+             print(f"Removed stale page directory: {out_dir}")
+
+    for k in set(page_cache) - seen_rel_paths:
+        del page_cache[k]
+
+    save_current_slugs(current_slugs)
+    save_page_cache(page_cache)
+
+    for layout_name, items in collections.items():
+        if not items:
+            continue
+        
+        has_date = any(x.get("date") for x in items)
+        has_order = any(x.get("order") is not None for x in items)
+        
+        if has_date:
+            items.sort(
+                key=lambda x: (
+                    safe_parse_date(x.get("date")) or datetime.min
+                ),
+                reverse=True,
+            )
+        elif has_order:
+            items.sort(key=lambda x: x.get("order", 999))
+
+    context_data = {f"{k.replace('-', '_')}s": v for k, v in collections.items()}
+
+    for page in pages:
         render_page(
-            page_data,
-            html_content,
+            page["data"],
+            page["content"],
             site_config,
             templates,
             image_manifest=image_manifest,
+            **context_data
+        )
+
+    tag_template = templates.get("tags") or templates.get("tags.html")
+    if tag_template:
+        tag_pages(
+            tag_template,
+            site_config,
+            tags,
+            image_manifest=image_manifest,
         )
     else:
-        print("Running a full build...")
-        sitemap_list = []
-        pages = []
-        tags = {}
+        print("Warning: tags template not found; skipping tag page generation.")
 
-        clean_output(OUTPUT_DIR)
+    sitemap_template = env.get_template("sitemap.xml.j2")
+    sitemap_xml = sitemap_template.render(site=site_config, pages=sitemap_list)
+    if _write_if_changed(os.path.join(OUTPUT_DIR, "sitemap.xml"), sitemap_xml):
+        print("Generated sitemap.xml")
 
-        current_slugs = set()
-        previous_slugs = load_previous_slugs()
-
-        # Dynamic collections: layout -> list of pages
-        collections = defaultdict(list)
-
-        for root, _, files in os.walk(CONTENT_DIR):
-            for filename in files:
-                if not filename.endswith(".md"):
-                    continue
-                
-                filepath = os.path.join(root, filename)
-                page_data, html_content = parse_file(
-                    filepath, pygments_theme, site_config.get("markdown")
-                )
-                if not page_data:
-                    continue
-                if str(page_data.get("draft")).lower() in ("true", "1", "yes"):
-                    continue
-                
-                # Determine slug/key for caching mechanism
-                # We use the relative path without extension as the key
-                rel_path = os.path.relpath(filepath, CONTENT_DIR)
-                slug_key = os.path.splitext(rel_path)[0].replace(os.sep, "/")
-                current_slugs.add(slug_key)
-
-                pages.append({"data": page_data, "content": html_content})
-
-                lastmod = page_data.get("date")
-                if not lastmod:
-                    try:
-                        lastmod = datetime.fromtimestamp(os.path.getmtime(filepath)).strftime("%Y-%m-%d")
-                    except OSError:
-                        lastmod = datetime.now().strftime("%Y-%m-%d")
-                sitemap_list.append({"url": page_data["url"], "lastmod": lastmod})
-                
-                layout = page_data.get("layout")
-                if layout:
-                    collections[layout].append(page_data)
-                    
-                    if layout == "post":
-                        for tag in page_data.get("tags") or []:
-                             tags.setdefault(tag, []).append(page_data)
-
-        removed = previous_slugs - current_slugs
-        for slug in removed:
-             top_level = slug.lstrip("/").split("/")[0]
-             if not top_level or top_level == "index" or top_level in PRESERVED_ROOTS:
-                 continue
-             out_dir = os.path.join(OUTPUT_DIR, slug)
-             if os.path.isdir(out_dir):
-                 shutil.rmtree(out_dir, ignore_errors=True)
-                 print(f"Removed stale page directory: {out_dir}")
-
-        save_current_slugs(current_slugs)
-
-        # Generic date sorting for all collections
-        for layout_name, items in collections.items():
-            if not items:
-                continue
-            
-            # Check if any item has a date
-            has_date = any(x.get("date") for x in items)
-            has_order = any(x.get("order") is not None for x in items)
-            
-            if has_date:
-                     items.sort(
-                        key=lambda x: (
-                            safe_parse_date(x.get("date")) or datetime.min
-                        ),
-                        reverse=True,
-                    )
-            elif has_order:
-                 items.sort(key=lambda x: x.get("order", 999))
-            else:
-                 pass
-
-        context_data = {}
-        for k, v in collections.items():
-            w = k.replace("-", "_") + "s"
-            context_data[w] = v
-
-        for page in pages:
-            render_page(
-                page["data"],
-                page["content"],
-                site_config,
-                templates,
-                image_manifest=image_manifest,
-                **context_data
-            )
-
-        tag_template = templates.get("tags") or templates.get("tags.html")
-        if tag_template:
-            tag_pages(
-                tag_template,
-                site_config,
-                tags,
-                image_manifest=image_manifest,
-            )
-        else:
-            print("Warning: tags template not found; skipping tag page generation.")
-
-        sitemap_template = env.get_template("sitemap.xml.j2")
-        sitemap_xml = sitemap_template.render(site=site_config, pages=sitemap_list)
-        try:
-            with open(os.path.join(OUTPUT_DIR, "sitemap.xml"), "w", encoding="utf-8") as f:
-                f.write(sitemap_xml)
-            print("Generated sitemap.xml")
-        except OSError as e:
-            print(f"Error: Failed to write sitemap.xml: {e}")
-
-        # Generate RSS/Atom feeds
-        generate_feeds(collections, site_config, env)
+    # Generate RSS/Atom feeds
+    generate_feeds(collections, site_config, env)
 
 
 if __name__ == "__main__":
