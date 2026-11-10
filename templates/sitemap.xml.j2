@@ -1,9 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
+{% set root = (site.base_url | default('localhost', true) | string).strip().rstrip('/') %}
+{% if '://' not in root %}{% set root = 'https://' ~ root %}{% endif %}
+{% set bp = (site.base_path | default('', true) | string).strip().strip('/') %}
+{% set base = root ~ ('/' ~ bp if bp else '') %}
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   {% for page in pages %}
   <url>
-    <loc>{{ site.base_url }}{{ page.url }}</loc>
-    <lastmod>{{ page.lastmod }}</lastmod>
+    <loc>{{ (base ~ page.url) | e }}</loc>
+    {% if page.lastmod %}<lastmod>{{ page.lastmod | e }}</lastmod>{% endif %}
   </url>
   {% endfor %}
 </urlset>

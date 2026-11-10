@@ -7,8 +7,8 @@
       {% endif %}
 
       <div class="max-w-md">
-        <h1 class="text-5xl font-bold">Hello, I'm {{ page.hero_title }} 👋</h1>
-        <p class="py-6">{{ page.hero_subtitle }}</p>
+        <h1 class="text-5xl font-bold">Hello, I'm {{ page.hero_title | e }} 👋</h1>
+        <p class="py-6">{{ page.hero_subtitle | e }}</p>
 
         <div class="join">
             {% for link in page.social_links %}
