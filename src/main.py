@@ -1,4 +1,11 @@
 import os
+import sys
+
+if sys.prefix == sys.base_prefix:
+    for _venv_py in (".venv/bin/python", ".venv/Scripts/python.exe"):
+        if os.path.exists(_venv_py):
+            os.execv(_venv_py, [_venv_py, *sys.argv])
+
 import yaml
 import markdown
 from jinja2 import Environment, FileSystemLoader, select_autoescape
@@ -461,8 +468,20 @@ def generate_styles(
     theme_path=GENERATED_THEME_PATH,
     fonts_path=GENERATED_FONTS_PATH,
 ):
-    with open(config_path, "r", encoding="utf-8") as f:
-        config = yaml.safe_load(f) or {}
+    config = {}
+    if os.path.exists(config_path):
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                loaded = yaml.safe_load(f)
+                if isinstance(loaded, dict):
+                    config = loaded
+                else:
+                    print(f"Warning: Configuration in {config_path} is not a dictionary. Using defaults.")
+        except (OSError, yaml.YAMLError) as e:
+            print(f"Warning: Could not read {config_path}: {e}. Using defaults.")
+    else:
+        print(f"Warning: Configuration file {config_path} not found. Using defaults.")
+
     normalize_theme_config(config)
     pygments_theme = resolve_pygments_theme(config)
     write_theme_file(config, theme_path)
@@ -561,8 +580,8 @@ def _strip_html(html_str):
     return re.sub(r"\s+", " ", unescape(re.sub(r"<[^>]+>", " ", cleaned))).strip()
 
 
-def parse_file(filepath, pygments_theme, markdown_config=None, md=None, page_cache=None, config_hash=""):
-    rel_path = os.path.relpath(filepath, CONTENT_DIR).replace(os.sep, "/")
+def parse_file(filepath, pygments_theme, markdown_config=None, md=None, page_cache=None, config_hash="", content_dir=CONTENT_DIR):
+    rel_path = os.path.relpath(filepath, content_dir).replace(os.sep, "/")
     try:
         st = os.stat(filepath)
     except OSError:
@@ -588,9 +607,17 @@ def parse_file(filepath, pygments_theme, markdown_config=None, md=None, page_cac
     if file_content.startswith("---"):
         try:
             parts = file_content.split("---", 2)
-            page_config = yaml.safe_load(parts[1]) or {}
-            page_config = _normalize_yaml_values(page_config)
-            markdown_data = parts[2]
+            if len(parts) < 3:
+                page_config = {}
+                markdown_data = file_content
+            else:
+                loaded = yaml.safe_load(parts[1])
+                if loaded is not None and not isinstance(loaded, dict):
+                    print(f"Warning: Frontmatter in {filepath} is not a dictionary. Ignoring.")
+                    page_config = {}
+                else:
+                    page_config = _normalize_yaml_values(loaded or {})
+                markdown_data = parts[2]
         except (IndexError, yaml.YAMLError) as e:
             print(f"Error parsing YAML frontmatter in {filepath}: {e}")
             page_config = {}
@@ -1056,12 +1083,184 @@ def generate_feeds(collections, site_config, env):
             print(f"Error: Failed to generate feed {filename}: {e}")
 
 
+def scaffold_content(title, kind="post", content_dir=CONTENT_DIR):
+    title = str(title or "").strip()
+    kind = str(kind or "post").strip().lower()
+    for prefix, k in (("docs/", "doc"), ("posts/", "post")):
+        if title.lower().startswith(prefix):
+            kind, title = k, title[len(prefix):].strip()
+            break
+    if not title:
+        print("Error: Title cannot be empty.")
+        sys.exit(1)
+
+    slug = "/".join(
+        s for p in title.lower().split("/")
+        if p not in ("", ".", "..") and (s := re.sub(r"[^a-z0-9]+", "-", p).strip("-"))
+    ) or "untitled"
+    subdirs = {"post": "posts", "doc": "docs", "page": ""}
+    kind = kind if kind in subdirs else "post"
+    target_path = os.path.join(content_dir, subdirs[kind], f"{slug}.md")
+    if os.path.exists(target_path):
+        print(f"Error: File already exists: {target_path}")
+        sys.exit(1)
+
+    os.makedirs(os.path.dirname(target_path) or ".", exist_ok=True)
+    q_title = json.dumps(title)
+    today = datetime.now().strftime("%Y-%m-%d")
+    frontmatter = {
+        "post": f'title: {q_title}\ndate: "{today}"\nlayout: "post"\ntags: []',
+        "doc": f'title: {q_title}\nlayout: "docs"\norder: 10',
+        "page": f'title: {q_title}\nlayout: "page"',
+    }[kind]
+    with open(target_path, "w", encoding="utf-8") as f:
+        f.write(f"---\n{frontmatter}\n---\n\nWrite your {kind} content here.\n")
+    print(f"Created {kind}: {target_path}")
+    return target_path
+
+
+def check_site(
+    config_path=CONFIG_FILE,
+    content_dir=CONTENT_DIR,
+    template_dir=TEMPLATE_DIR,
+    images_dir=IMAGES_DIR,
+    exit_on_error=False,
+):
+    errors = []
+    warnings = []
+
+    config = {}
+    if not os.path.exists(config_path):
+        errors.append(f"Config file not found: {config_path}")
+    else:
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                loaded = yaml.safe_load(f)
+                if isinstance(loaded, dict):
+                    config = loaded
+                    if not config.get("site_name"):
+                        warnings.append(f"Missing 'site_name' in {config_path}")
+                    if not config.get("base_url"):
+                        warnings.append(f"Missing 'base_url' in {config_path}")
+                else:
+                    errors.append(f"Config file {config_path} is not a valid YAML dictionary")
+        except (OSError, yaml.YAMLError) as e:
+            errors.append(f"Invalid YAML in {config_path}: {e}")
+
+    env = Environment(
+        loader=FileSystemLoader(template_dir) if os.path.isdir(template_dir) else FileSystemLoader("."),
+        autoescape=select_autoescape(["html", "htm", "xml", "j2"]),
+    )
+    try:
+        templates = load_templates(env, template_dir=template_dir) if os.path.isdir(template_dir) else {}
+    except Exception as e:
+        errors.append(f"Template error: {e}")
+        templates = {}
+
+    pygments_theme = resolve_pygments_theme(config)
+    md_config = dict(config.get("markdown") or {})
+    for k in ("default_layout", "default_layouts"):
+        if k not in md_config and config.get(k):
+            md_config[k] = config[k]
+    md = build_markdown(pygments_theme, md_config)
+
+    seen_urls = {}
+    if not os.path.isdir(content_dir):
+        warnings.append(f"Content directory not found: {content_dir}")
+    else:
+        for root, _, files in os.walk(content_dir):
+            for filename in files:
+                if not filename.endswith(".md"):
+                    continue
+                filepath = os.path.join(root, filename)
+                rel_path = os.path.relpath(filepath, content_dir).replace(os.sep, "/")
+
+                try:
+                    with open(filepath, "r", encoding="utf-8") as f:
+                        raw = f.read()
+                    if raw.startswith("---"):
+                        parts = raw.split("---", 2)
+                        if len(parts) < 3:
+                            errors.append(f"Unclosed frontmatter in {rel_path}")
+                            continue
+                        else:
+                            try:
+                                fm = yaml.safe_load(parts[1])
+                                if fm is not None and not isinstance(fm, dict):
+                                    errors.append(f"Frontmatter in {rel_path} must be a dictionary, got {type(fm).__name__}")
+                                    continue
+                            except yaml.YAMLError as ye:
+                                errors.append(f"Invalid YAML frontmatter in {rel_path}: {ye}")
+                                continue
+                except OSError as e:
+                    errors.append(f"Could not read {rel_path}: {e}")
+                    continue
+
+                page_data, html_content = parse_file(
+                    filepath,
+                    pygments_theme,
+                    md_config,
+                    md=md,
+                    content_dir=content_dir,
+                )
+                if not page_data:
+                    continue
+
+                layout = page_data.get("layout") or "post"
+                effective_layout = "post" if (layout == "page" and layout not in templates and "post" in templates) else layout
+
+                if templates and effective_layout not in templates:
+                    errors.append(f"Missing template '{layout}' for {rel_path}")
+
+                if str(page_data.get("draft")).lower() not in ("true", "1", "yes"):
+                    url = page_data.get("url")
+                    if url in seen_urls:
+                        errors.append(f"Duplicate URL '{url}' in {rel_path} and {seen_urls[url]}")
+                    else:
+                        seen_urls[url] = rel_path
+
+                hero = page_data.get("hero_image")
+                candidates = ([hero] if isinstance(hero, str) else []) + re.findall(r'<img[^>]+src=["\']([^"\']+)["\']', html_content or "")
+                images_to_check = [s for s in candidates if "assets/images/" in s and not s.startswith(("http://", "https://", "//", "data:"))]
+                for img_ref in images_to_check:
+                    clean_ref = img_ref.split("?", 1)[0].split("#", 1)[0]
+                    rel_img = clean_ref.split("assets/images/", 1)[1].lstrip("/")
+                    if not os.path.exists(os.path.join(images_dir, rel_img)):
+                        warnings.append(f"Referenced image not found: {img_ref} in {rel_path}")
+
+    for w in warnings:
+        print(f"Warning: {w}")
+    for e in errors:
+        print(f"Error: {e}")
+
+    if errors:
+        print(f"Site check failed with {len(errors)} error(s).")
+        if exit_on_error:
+            sys.exit(1)
+    else:
+        print("Site check passed.")
+
+    return errors, warnings
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--file")
     parser.add_argument("--clean", action="store_true")
     parser.add_argument("--generate-styles", action="store_true")
+    parser.add_argument("--new", nargs="?", const="", metavar="TITLE", help="Scaffold a new markdown file")
+    parser.add_argument("title", nargs="?", help=argparse.SUPPRESS)
+    parser.add_argument("--kind", choices=["post", "page", "doc"], default="post", help="Kind of content to scaffold")
+    parser.add_argument("--check", action="store_true", help="Validate site configuration and content")
     args = parser.parse_args()
+
+    if args.new is not None:
+        scaffold_content(args.new or args.title, kind=args.kind)
+        return
+
+    if args.check:
+        check_site(exit_on_error=True)
+        return
 
     if args.clean:
         clean_output(OUTPUT_DIR)

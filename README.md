@@ -68,8 +68,18 @@ mettu (మెట్లు, /ˈmɛt.t̪u/) is a simple static site generator that
    You can still override the interpreter via the `PY_EXECUTABLE` environment variable if needed, but the config file is the canonical source.
 
 5. Create markdown files in the `content` directory.
+   - **CLI Scaffolding**: Easily create new posts, pages, or docs:
+     ```bash
+     npm run new -- "My Post"                # Creates content/posts/my-post.md
+     npm run new -- --kind doc "User Guide"  # Creates content/docs/user-guide.md
+     npm run new -- --kind page "About"      # Creates content/about.md
+     ```
+   - **Frontmatter Defaults**:
+     - `title`: Optional. If omitted, inferred from the first `# Heading` or humanized from the filename stem.
+     - `layout`: Optional. Files in `content/posts/` default to `post`, `content/docs/` default to `docs`, and others to `page`.
+     - `permalink`: Optional. Override the output URL (e.g., `permalink: "/about"`).
+     - `show_toc: true`: Displays a collapsible DaisyUI Table of Contents.
    - **Dynamic Routing**: Nested directories are supported (e.g., `content/blog/post-1.md` becomes `/blog/post-1.html`).
-   - Each file should start with frontmatter similarly to the given examples.
 
 6. Templates and svg icons are located in the `templates` directory. You can customize them as needed.
 
@@ -101,4 +111,22 @@ mettu (మెట్లు, /ˈmɛt.t̪u/) is a simple static site generator that
 
    ```bash
    npm run build
+   ```
+
+11. Validate site configuration and content
+
+   ```bash
+   npm run check
+   ```
+
+12. Preview production build
+
+   ```bash
+   npm run preview
+   ```
+
+13. Run tests
+
+   ```bash
+   npm test
    ```
