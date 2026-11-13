@@ -1,6 +1,6 @@
 {
   "name": "@andy34g7/mettu",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "bin": {
     "mettu": "bin/mettu.mjs"
   },
@@ -25,15 +25,15 @@
   "license": "ISC",
   "description": "",
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.966.0",
-    "@tailwindcss/typography": "^0.5.16",
-    "@tailwindcss/vite": "^4.1.11",
-    "daisyui": "^5.0.50",
-    "dotenv": "^17.2.1",
+    "@aws-sdk/client-s3": "^3.1168.0",
+    "@tailwindcss/typography": "^0.5.20",
+    "@tailwindcss/vite": "^4.3.5",
+    "daisyui": "^5.8.0",
+    "dotenv": "^18.0.10",
     "fast-glob": "^3.3.3",
-    "sharp": "^0.34.3",
-    "tailwindcss": "^4.1.11",
-    "vite": "^7.0.6",
-    "yaml": "^2.5.1"
+    "sharp": "^0.35.5",
+    "tailwindcss": "^4.3.5",
+    "vite": "^8.3.8",
+    "yaml": "^2.9.1"
   }
 }
