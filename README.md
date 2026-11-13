@@ -13,34 +13,34 @@ It is built for personal blogs, portfolio sites, and first-class **documentation
 
 ## Features
 
-- ⚡ **Hybrid Architecture**: Fast Python engine for Markdown parsing, syntax highlighting, and feed generation + Vite for Tailwind CSS v4, DaisyUI v5, and HMR.
-- 🚀 **High Performance**: In-memory and disk caching for Markdown ASTs, dependency hash tracking to skip redundant `pip install` checks, and sub-300ms builds.
-- 📚 **First-Class Documentation Sites**:
+- **Hybrid Architecture**: Fast Python engine for Markdown parsing, syntax highlighting, and feed generation + Vite for Tailwind CSS v4, DaisyUI v5, and HMR.
+- **High Performance**: In-memory and disk caching for Markdown ASTs, dependency hash tracking to skip redundant `pip install` checks, and sub-300ms builds.
+- **First-Class Documentation Sites**:
   - Dedicated 3-column documentation layout with sticky on-page Table of Contents.
   - Automatic hierarchical sidebar tree with section grouping and `order:` sorting.
   - Sequential **Previous / Next** pagination links and breadcrumb trails.
   - Built-in `⌘K` / `Ctrl+K` client-side instant search modal (`/search-index.json`).
   - GitHub-style callouts (`> [!NOTE]`, `> [!TIP]`, `> [!IMPORTANT]`, `> [!WARNING]`, `> [!CAUTION]`).
   - One-click **Copy** button on all code blocks.
-- ✍️ **Zero-Boilerplate Content Authoring**:
+- **Zero-Boilerplate Content Authoring**:
   - Optional frontmatter: automatic title inference from `# Heading` or filename stem.
   - Directory-based default layout inference (`posts/` → `post`, `docs/` → `docs`, others → `page`).
   - Automated reading time calculation and plain-text excerpt generation.
   - Custom `permalink` overrides for fine-grained URL routing.
   - Universal tagging across all content pages with dedicated tag index pages.
-- 🎨 **Theming & Design**:
+- **Theming & Design**:
   - DaisyUI v5 presets and custom CSS color definitions.
   - Built-in navbar theme switcher with pre-paint `localStorage` persistence.
   - Pygments code syntax highlighting with auto-generated stylesheet.
-- 🖼️ **Responsive Image Optimization**:
+- **Responsive Image Optimization**:
   - Automatic WebP, AVIF, and JPEG generation at multiple breakpoints via Sharp.
   - Automatic markup rewrite into responsive `<picture>` elements with `srcset`.
   - Optional remote upload and sync with S3/Backblaze B2 buckets.
-- 📡 **Web Feeds & SEO**:
+- **Web Feeds & SEO**:
   - Automatic Atom/RSS feed generation with human-readable styling (`pretty-feed-v3.xsl`).
   - XML sitemap (`/sitemap.xml`) generation with valid `<loc>` and `<lastmod>` timestamps.
   - OpenGraph and meta description tags.
-- 🛠️ **Developer Experience (DX)**:
+- **Developer Experience (DX)**:
   - Scaffolding CLI: `npm run new -- "My New Post"`.
   - Site health & link validator: `npm run check`.
   - Zero-dependency unit test suite: `npm test`.

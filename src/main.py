@@ -8,7 +8,7 @@ if __name__ == "__main__" and sys.prefix == sys.base_prefix:
 
 import yaml
 import markdown
-from jinja2 import Environment, FileSystemLoader, select_autoescape
+from jinja2 import ChoiceLoader, Environment, FileSystemLoader, select_autoescape
 from datetime import date, datetime, timezone
 import argparse
 import shutil
@@ -45,6 +45,7 @@ PRESERVED_ROOTS = {
     ".cache",
     ".venv",
     "assets",
+    "bin",
     "content",
     "dist",
     "node_modules",
@@ -544,20 +545,55 @@ def build_markdown(pygments_theme, markdown_config=None):
     )
 
 
-def load_templates(env, template_dir=TEMPLATE_DIR, allowed_extensions=(".html", ".jinja", ".jinja2", ".j2")):
+def build_template_env(template_dir=TEMPLATE_DIR, engine_dir=None):
+    """Build a Jinja2 Environment that checks site templates first, then engine fallback templates."""
+    engine_dir = engine_dir or os.environ.get("METTU_ENGINE_DIR")
+    loaders = []
+    if template_dir and os.path.isdir(template_dir):
+        loaders.append(FileSystemLoader(template_dir))
+    if engine_dir:
+        engine_templates = os.path.join(engine_dir, "templates")
+        if os.path.isdir(engine_templates) and (
+            not template_dir or os.path.abspath(engine_templates) != os.path.abspath(template_dir)
+        ):
+            loaders.append(FileSystemLoader(engine_templates))
+    return Environment(
+        loader=ChoiceLoader(loaders) if loaders else FileSystemLoader("."),
+        autoescape=select_autoescape(["html", "htm", "xml", "j2"]),
+    )
+
+
+def load_templates(
+    env,
+    template_dir=TEMPLATE_DIR,
+    allowed_extensions=(".html", ".jinja", ".jinja2", ".j2"),
+    engine_dir=None,
+):
     templates = {}
-    for root, _, files in os.walk(template_dir):
-        for filename in files:
-            if allowed_extensions and not filename.endswith(allowed_extensions):
-                continue
-            rel_path = os.path.relpath(os.path.join(root, filename), template_dir)
-            rel_path = rel_path.replace(os.sep, "/")
-            template = env.get_template(rel_path)
-            base_name = os.path.splitext(filename)[0]
-            rel_without_ext = os.path.splitext(rel_path)[0]
-            for key in (rel_path, rel_without_ext, base_name):
-                if key not in templates:
-                    templates[key] = template
+    engine_dir = engine_dir or os.environ.get("METTU_ENGINE_DIR")
+    search_dirs = []
+    if template_dir and os.path.isdir(template_dir):
+        search_dirs.append(template_dir)
+    if engine_dir:
+        engine_templates = os.path.join(engine_dir, "templates")
+        if os.path.isdir(engine_templates) and (
+            not template_dir or os.path.abspath(engine_templates) != os.path.abspath(template_dir)
+        ):
+            search_dirs.append(engine_templates)
+
+    for base_dir in search_dirs:
+        for root, _, files in os.walk(base_dir):
+            for filename in files:
+                if allowed_extensions and not filename.endswith(allowed_extensions):
+                    continue
+                rel_path = os.path.relpath(os.path.join(root, filename), base_dir)
+                rel_path = rel_path.replace(os.sep, "/")
+                template = env.get_template(rel_path)
+                base_name = os.path.splitext(filename)[0]
+                rel_without_ext = os.path.splitext(rel_path)[0]
+                for key in (rel_path, rel_without_ext, base_name):
+                    if key not in templates:
+                        templates[key] = template
     return templates
 
 
@@ -1276,12 +1312,9 @@ def check_site(
         except (OSError, yaml.YAMLError) as e:
             errors.append(f"Invalid YAML in {config_path}: {e}")
 
-    env = Environment(
-        loader=FileSystemLoader(template_dir) if os.path.isdir(template_dir) else FileSystemLoader("."),
-        autoescape=select_autoescape(["html", "htm", "xml", "j2"]),
-    )
+    env = build_template_env(template_dir=template_dir)
     try:
-        templates = load_templates(env, template_dir=template_dir) if os.path.isdir(template_dir) else {}
+        templates = load_templates(env, template_dir=template_dir)
     except Exception as e:
         errors.append(f"Template error: {e}")
         templates = {}
@@ -1406,10 +1439,7 @@ def main():
         return
 
     site_config, pygments_theme = generate_styles()
-    env = Environment(
-        loader=FileSystemLoader(TEMPLATE_DIR),
-        autoescape=select_autoescape(["html", "htm", "xml", "j2"]),
-    )
+    env = build_template_env(template_dir=TEMPLATE_DIR)
     templates = load_templates(env)
     image_manifest = load_image_manifest()
     page_cache = load_page_cache()

@@ -8,17 +8,29 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import YAML from 'yaml';
 import glob from 'fast-glob';
+import { createRequire } from 'module';
 import { processImages } from './src/image-preprocess.mjs';
+
+const require = createRequire(import.meta.url);
 
 dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const engineDir = path.dirname(__filename);
+const siteRoot = path.resolve(process.env.METTU_SITE_ROOT || process.cwd());
 
-const inputDir = path.join(__dirname, '/assets/images');
-const outputDir = path.join(__dirname, '/assets/images-processed');
-const siteConfigPath = path.join(__dirname, 'config.yaml');
-const requirementsPath = path.join(__dirname, 'requirements.txt');
+const inputDir = path.join(siteRoot, 'assets/images');
+const outputDir = path.join(siteRoot, 'assets/images-processed');
+const siteConfigPath = path.join(siteRoot, 'config.yaml');
+const requirementsPath = path.join(engineDir, 'requirements.txt');
+const mainPyPath = path.join(engineDir, 'src/main.py');
+
+const runPythonScript = (args = []) => {
+  return execFileSync(pythonExecutable, [mainPyPath, ...args], {
+    cwd: siteRoot,
+    env: { ...process.env, METTU_ENGINE_DIR: engineDir },
+  });
+};
 
 const loadSiteConfig = () => {
   try {
@@ -49,8 +61,8 @@ const resolvePythonExecutable = () => {
   }
 
   const venvCandidates = process.platform === 'win32'
-    ? [path.join(__dirname, '.venv/Scripts/python.exe'), path.join(__dirname, '.venv/bin/python')]
-    : [path.join(__dirname, '.venv/bin/python'), path.join(__dirname, '.venv/Scripts/python.exe')];
+    ? [path.join(siteRoot, '.venv/Scripts/python.exe'), path.join(siteRoot, '.venv/bin/python')]
+    : [path.join(siteRoot, '.venv/bin/python'), path.join(siteRoot, '.venv/Scripts/python.exe')];
   const foundVenv = venvCandidates.find(p => fs.existsSync(p));
   if (foundVenv) return foundVenv;
 
@@ -79,7 +91,7 @@ let pythonExecutable = resolvePythonExecutable();
 console.log(`[config] Using Python executable: ${pythonExecutable}`);
 
 const ensurePythonRequirements = () => {
-  const venvPath = path.join(__dirname, '.venv');
+  const venvPath = path.join(siteRoot, '.venv');
   const isWindows = process.platform === 'win32';
   
   const venvPython = isWindows 
@@ -90,7 +102,7 @@ const ensurePythonRequirements = () => {
     ? path.join(venvPath, 'Scripts', 'pip.exe')
     : path.join(venvPath, 'bin', 'pip');
 
-  const hashFile = path.join(__dirname, '.cache/requirements.hash');
+  const hashFile = path.join(siteRoot, '.cache/requirements.hash');
   let currentHash = '';
   try {
     const content = fs.readFileSync(requirementsPath, 'utf8') + '\n' + venvPython + '\n' + pythonExecutable;
@@ -143,12 +155,12 @@ const refreshPythonExecutable = () => {
 
 ensurePythonRequirements();
 
-const GLOB_IGNORES = ['!dist/**', '!node_modules/**', '!**/.venv/**', '!templates/**', '!public/**', '!content/**', '!assets/**', '!src/**', '!scripts/**', '!tests/**'];
+const GLOB_IGNORES = ['!dist/**', '!node_modules/**', '!**/.venv/**', '!templates/**', '!public/**', '!content/**', '!assets/**', '!bin/**', '!src/**', '!scripts/**', '!tests/**'];
 
 const handleExit = () => {
   console.log('\nCleaning up build files...');
   try {
-    const output = execFileSync(pythonExecutable, ['src/main.py', '--clean']);
+    const output = runPythonScript(['--clean']);
     console.log(output.toString().trim());
   } catch (e) {
     console.error("Cleanup script failed:", e);
@@ -167,21 +179,22 @@ const py_build_plugin = () => {
   return {
     name: 'builder-ssg',
     closeBundle() {
-      const xmlFiles = glob.sync(['**/*.xml', ...GLOB_IGNORES]);
+      const distDir = path.join(siteRoot, 'dist');
+      const xmlFiles = glob.sync(['**/*.xml', ...GLOB_IGNORES], { cwd: siteRoot });
       for (const relPath of xmlFiles) {
-        const destPath = path.join('./dist', relPath);
+        const destPath = path.join(distDir, relPath);
         fs.mkdirSync(path.dirname(destPath), { recursive: true });
-        fs.copyFileSync(relPath, destPath);
+        fs.copyFileSync(path.join(siteRoot, relPath), destPath);
       }
 
-      const searchIndex = 'search-index.json';
+      const searchIndex = path.join(siteRoot, 'search-index.json');
       if (fs.existsSync(searchIndex)) {
-        fs.copyFileSync(searchIndex, path.join('./dist', searchIndex));
+        fs.copyFileSync(searchIndex, path.join(distDir, 'search-index.json'));
       }
 
       console.log('Cleaning up root directory...');
       try {
-        const output = execFileSync(pythonExecutable, ['src/main.py', '--clean']);
+        const output = runPythonScript(['--clean']);
         console.log(output.toString().trim());
       } catch (e) {
         console.error('Failed to cleanup:', e);
@@ -190,8 +203,8 @@ const py_build_plugin = () => {
     configureServer(server) {
       const build = (file = null) => {
         try {
-          const args = file ? ['src/main.py', '--file', file] : ['src/main.py'];
-          const output = execFileSync(pythonExecutable, args);
+          const args = file ? ['--file', file] : [];
+          const output = runPythonScript(args);
           console.log(output.toString().trim());
 
           server.ws.send({ type: 'full-reload', path: "*" });
@@ -265,9 +278,9 @@ export default defineConfig(async ({ command }) => {
       'assets/css/generated.fonts.css',
       'assets/css/syntax.css'
     ];
-    if (requiredCss.some(f => !fs.existsSync(path.join(__dirname, f)))) {
+    if (requiredCss.some(f => !fs.existsSync(path.join(siteRoot, f)))) {
       try {
-        execFileSync(pythonExecutable, ['src/main.py', '--generate-styles']);
+        runPythonScript(['--generate-styles']);
       } catch (e) {
         console.error('[styles] failed to generate theme/font CSS.', e);
       }
@@ -277,7 +290,7 @@ export default defineConfig(async ({ command }) => {
   if (command === 'build') {
     console.log('Buiding static pages for production');
     try {
-      const output = execFileSync(pythonExecutable, ['src/main.py']);
+      const output = runPythonScript([]);
       console.log(output.toString().trim());
     } catch (e) {
       console.error('Failed to generate static files:', e);
@@ -285,15 +298,25 @@ export default defineConfig(async ({ command }) => {
     }
   }
 
-  const inputFiles = glob.sync(['**/*.html', ...GLOB_IGNORES]);
+  const inputFiles = glob
+    .sync(['**/*.html', ...GLOB_IGNORES], { cwd: siteRoot })
+    .map(relPath => path.join(siteRoot, relPath));
 
   return {
+    root: siteRoot,
+    resolve: {
+      alias: {
+        tailwindcss: path.join(path.dirname(require.resolve('tailwindcss/package.json')), 'index.css'),
+        '@tailwindcss/typography': require.resolve('@tailwindcss/typography'),
+        daisyui: path.dirname(require.resolve('daisyui/package.json')),
+      },
+    },
     plugins: [
       py_build_plugin(),
       tailwindcss(),
     ],
     build: {
-      outDir: './dist',
+      outDir: path.join(siteRoot, 'dist'),
       rollupOptions: {
         input: inputFiles,
       },
@@ -301,7 +324,7 @@ export default defineConfig(async ({ command }) => {
     server: {
       watch: {
         ignored: (p) => {
-          const relPath = path.relative(__dirname, p).replace(/\\/g, '/');
+          const relPath = path.relative(siteRoot, p).replace(/\\/g, '/');
           if (!relPath || relPath === '.') return false;
           if (relPath.startsWith('..')) return true;
 

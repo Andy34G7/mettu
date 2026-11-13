@@ -27,6 +27,8 @@ from src.main import (
     _render_callouts,
     build_docs_navigation,
     build_collection_context,
+    build_template_env,
+    load_templates,
     _flatten_toc_headings,
 )
 
@@ -416,6 +418,27 @@ class TestMarkdownAndToc(unittest.TestCase):
         self.assertEqual(ctx["til_tags"], ["git"])
         self.assertEqual(ctx["my_note_tags"], [])
         self.assertEqual(len(ctx["my_notes"]), 1)
+
+    def test_template_override_with_engine_fallback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            site_tpl = os.path.join(tmp, "site", "templates")
+            engine_dir = os.path.join(tmp, "engine")
+            engine_tpl = os.path.join(engine_dir, "templates")
+            os.makedirs(site_tpl)
+            os.makedirs(engine_tpl)
+
+            with open(os.path.join(engine_tpl, "base.html"), "w", encoding="utf-8") as f:
+                f.write("engine-base")
+            with open(os.path.join(engine_tpl, "page.html"), "w", encoding="utf-8") as f:
+                f.write("engine-page")
+            with open(os.path.join(site_tpl, "base.html"), "w", encoding="utf-8") as f:
+                f.write("site-base")
+
+            env = build_template_env(template_dir=site_tpl, engine_dir=engine_dir)
+            templates = load_templates(env, template_dir=site_tpl, engine_dir=engine_dir)
+
+            self.assertEqual(templates["base"].render(), "site-base")
+            self.assertEqual(templates["page"].render(), "engine-page")
 
 
 if __name__ == "__main__":
