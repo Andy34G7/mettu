@@ -788,6 +788,21 @@ def _safe_order(val, default=999):
         return default
 
 
+def build_collection_context(collections):
+    """Build template context variables for collections and per-layout tag lists."""
+    context_data = {}
+    for layout_name, items in collections.items():
+        safe_name = layout_name.replace("-", "_")
+        context_data[f"{safe_name}s"] = items
+        layout_tags = {
+            tag
+            for item in items
+            for tag in (item.get("tags") or [])
+        }
+        context_data[f"{safe_name}_tags"] = sorted(layout_tags)
+    return context_data
+
+
 def build_docs_navigation(docs_pages):
     if not docs_pages:
         return [], []
@@ -1513,7 +1528,7 @@ def main():
     if ordered_docs:
         collections["docs"] = ordered_docs
 
-    context_data = {f"{k.replace('-', '_')}s": v for k, v in collections.items()}
+    context_data = build_collection_context(collections)
     context_data["all_tags"] = tags
     context_data["docs_tree"] = docs_tree
     context_data["docs"] = ordered_docs

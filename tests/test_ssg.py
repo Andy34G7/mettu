@@ -26,6 +26,7 @@ from src.main import (
     check_site,
     _render_callouts,
     build_docs_navigation,
+    build_collection_context,
     _flatten_toc_headings,
 )
 
@@ -395,6 +396,26 @@ class TestMarkdownAndToc(unittest.TestCase):
         md = build_markdown("native")
         html = md.convert("```python\nx = 1\n```")
         self.assertIn('class="highlight"', html)
+
+    def test_build_collection_context_per_layout_tags(self):
+        collections = {
+            "post": [
+                {"title": "A", "tags": ["python", "ssg"]},
+                {"title": "B", "tags": ["python", "web"]},
+            ],
+            "til": [
+                {"title": "C", "tags": ["git"]},
+            ],
+            "my-note": [
+                {"title": "D", "tags": None},
+            ],
+        }
+        ctx = build_collection_context(collections)
+        self.assertEqual(len(ctx["posts"]), 2)
+        self.assertEqual(ctx["post_tags"], ["python", "ssg", "web"])
+        self.assertEqual(ctx["til_tags"], ["git"])
+        self.assertEqual(ctx["my_note_tags"], [])
+        self.assertEqual(len(ctx["my_notes"]), 1)
 
 
 if __name__ == "__main__":
